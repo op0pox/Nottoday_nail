@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+
+# 촬영된 사진과 측정 결과는 실험마다 달라지는 개인 데이터이므로 git에는 올리지 않는다.
+data/captured/*
+data/results/*
+data/test_images/*
+!data/captured/.gitkeep
+!data/results/.gitkeep
+!data/test_images/.gitkeep
