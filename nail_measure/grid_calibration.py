@@ -2,14 +2,21 @@
 grid_calibration.py
 ====================
 [1. 역할]
-    0.5mm 모눈판이 함께 촬영된 사진을 열어서, 사용자가 모눈 눈금의
+    모눈판이 함께 촬영된 사진을 열어서, 사용자가 모눈 눈금의
     시작점과 끝점을 클릭하면 그 사이의 실제 칸 수(cells)를 이용해
     "픽셀 1개가 실제로 몇 mm인지(px_per_mm)"를 계산한다.
     이 값은 이후 manual_measure.py에서 손톱 길이를 mm로 변환할 때 쓰인다.
 
+    주의: 모눈 한 칸의 실제 크기는 --cell-size-mm 으로 지정한다.
+    기본값은 5mm(0.5cm)로 되어 있다. 다른 모눈판(예: 진짜 0.5mm 간격)을
+    쓴다면 반드시 --cell-size-mm 값을 그 모눈판에 맞게 바꿔야 한다.
+    이 값이 실제와 다르면 px_per_mm이 통째로 몇 배씩 틀어지고,
+    그 결과 손톱 길이도 똑같은 배수로 틀어진다.
+
 [2. 실행 명령어]
     python3 grid_calibration.py --image data/captured/capture_20260702_193045.jpg
     python3 grid_calibration.py --image data/captured/sample.jpg --cells 10
+    python3 grid_calibration.py --image data/captured/sample.jpg --cell-size-mm 0.5   # 0.5mm 모눈판을 쓸 경우
     python3 grid_calibration.py --image data/captured/sample.jpg --output data/results/sample_calib.json
 
 [3. 어디에 입력해야 하는가]
@@ -24,8 +31,8 @@ grid_calibration.py
     터미널에 아래처럼 결과가 출력된다.
 
         [OK] 픽셀 거리: 240.00 px
-        [OK] 실제 거리: 5.0 mm (모눈 10칸 x 0.5mm)
-        [OK] px_per_mm = 48.0000
+        [OK] 실제 거리: 50.0 mm (모눈 10칸 x 5.0mm)
+        [OK] px_per_mm = 4.8000
         [SAVED] data/results/sample_calib.json
 
 [5. 오류가 발생하면 확인할 것]
@@ -33,8 +40,10 @@ grid_calibration.py
       존재하는지 확인 (ls data/captured/ 로 파일명 확인)
     - 점을 두 번 다 못 찍고 끝났다: 실수로 'q'를 눌러 취소된 것일 수 있음.
       다시 실행해서 순서대로 두 점만 클릭
-    - px_per_mm 값이 이상하게 크거나 작다: --cells 값이 실제로 클릭한
-      모눈 칸 수와 맞는지 다시 확인
+    - px_per_mm 값이 이상하게 크거나 작다(예: 실제보다 몇 배씩 차이):
+      1) --cells 값이 실제로 클릭한 모눈 칸 수와 맞는지 확인
+      2) --cell-size-mm 값이 실제 모눈판의 한 칸 크기와 맞는지 확인
+         (이 프로젝트 기본 모눈판은 한 칸 5mm=0.5cm 이다)
 """
 
 import argparse
@@ -47,19 +56,20 @@ from utils import collect_points, ensure_dir, save_json
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="0.5mm 모눈판 기준 px_per_mm 계산")
+    parser = argparse.ArgumentParser(description="모눈판 기준 px_per_mm 계산")
     parser.add_argument("--image", required=True, help="모눈판이 촬영된 이미지 경로")
     parser.add_argument(
         "--cells",
         type=int,
         default=10,
-        help="클릭한 시작점과 끝점 사이의 모눈 칸 수 (기본 10칸 = 5.0mm)",
+        help="클릭한 시작점과 끝점 사이의 모눈 칸 수 (기본 10칸)",
     )
     parser.add_argument(
         "--cell-size-mm",
         type=float,
-        default=0.5,
-        help="모눈 한 칸의 실제 크기 (mm, 기본 0.5mm)",
+        default=5.0,
+        help="모눈 한 칸의 실제 크기 (mm, 기본 5.0mm=0.5cm). "
+        "0.5mm 간격 모눈판을 쓴다면 --cell-size-mm 0.5 로 지정할 것",
     )
     parser.add_argument(
         "--output",

@@ -105,7 +105,11 @@ def menu_calibration(defaults):
         print("[ERROR] 이미지 경로가 필요합니다.")
         return
     cells = ask("모눈 칸 수", "10")
-    run_script("grid_calibration.py", ["--image", image, "--cells", cells])
+    cell_size_mm = ask("모눈 한 칸 크기(mm)", "5.0")
+    run_script(
+        "grid_calibration.py",
+        ["--image", image, "--cells", cells, "--cell-size-mm", cell_size_mm],
+    )
 
 
 def menu_measure(defaults):

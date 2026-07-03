@@ -1,8 +1,10 @@
 # nail_measure
 
-Jetson Nano + 카메라로 손톱 사진을 찍고, 0.5mm 모눈판을 기준으로
+Jetson Nano + 카메라로 손톱 사진을 찍고, 모눈판을 기준으로
 픽셀-mm 비율을 계산한 뒤, 엄지/검지/중지/약지/소지 5개 손톱의
-길이(뿌리~끝)를 mm 단위로 측정하는 프로젝트다.
+길이(뿌리~끝)를 mm 단위로 측정하는 프로젝트다. (현재 사용 중인 모눈판은
+한 칸 5mm=0.5cm 짜리이며, `grid_calibration.py --cell-size-mm` 값으로
+다른 모눈판에도 맞출 수 있다.)
 
 초기 버전은 딥러닝 자동 검출이 아니라, **사용자가 이미지에서 직접
 점을 클릭하는 방식**으로 정확한 측정 흐름을 먼저 검증하는 것을
@@ -28,7 +30,7 @@ Jetson Nano + 카메라로 손톱 사진을 찍고, 0.5mm 모눈판을 기준으
   - Arducam 16MP Auto Focus (CSI 또는 USB 버전)
   - Raspberry Pi Camera Module 3 (CSI)
   - Raspberry Pi Camera Module 2 (CSI)
-- 0.5mm 모눈판
+- 모눈판 (현재 사용 중인 것은 한 칸 5mm=0.5cm)
 - 일반 자 (실제 길이 검증용)
 - 카메라 고정 거치대 (높이를 바꿔가며 촬영하기 위함)
 - 조명
@@ -43,7 +45,7 @@ nail_measure/
 ├── utils.py                 # 공용 함수 모음 (카메라 열기, 클릭 UI, 파일 저장 등)
 ├── camera_test.py           # 1단계: 카메라 연결 확인
 ├── capture_image.py         # 2단계: 사진 촬영 (s=저장, q=종료)
-├── grid_calibration.py      # 3단계: 0.5mm 모눈 기준 px_per_mm 계산
+├── grid_calibration.py      # 3단계: 모눈 기준 px_per_mm 계산
 ├── manual_measure.py        # 4단계: 5개 손가락 손톱 길이 수동 측정
 ├── compare_actual.py        # 5단계: 실제 자 측정값과 비교(오차/오차율)
 ├── height_experiment.py     # 6단계: 카메라 높이별 실험 기록 및 평균 오차 요약
@@ -239,17 +241,23 @@ python3 capture_image.py
 - 화면이 뜨면 `s` = 저장, `q` = 종료.
 - 저장 위치: `data/captured/capture_YYYYMMDD_HHMMSS.jpg`
 
-손은 0.5mm 모눈판 위에 자연스럽게 펴서 올리고, 손톱 뿌리와 끝이
+손은 모눈판 위에 자연스럽게 펴서 올리고, 손톱 뿌리와 끝이
 모눈판과 함께 선명하게 보이도록 촬영한다.
 
-### 모눈(0.5mm) 보정
+### 모눈 보정
 
 ```bash
 python3 grid_calibration.py --image data/captured/capture_20260702_193045.jpg --cells 10
 ```
 
-- 모눈 10칸(=5.0mm) 정도의 시작점/끝점을 클릭한다. 칸 수를 다르게
-  세었다면 `--cells` 값을 그에 맞게 바꾼다.
+- 모눈 10칸(기본 한 칸 5mm=0.5cm 기준, 총 50mm) 정도의 시작점/끝점을 클릭한다.
+  칸 수를 다르게 세었다면 `--cells` 값을 그에 맞게 바꾼다.
+- **중요**: `--cell-size-mm` 기본값은 5.0(mm)이다. 실제 쓰는 모눈판의 한 칸
+  크기가 다르면(예: 진짜 0.5mm 간격 모눈판) 반드시
+  `--cell-size-mm 0.5` 처럼 실제 값으로 지정해야 한다. 이 값이 틀리면
+  손톱 길이 전체가 그 배수만큼 통째로 틀어진다. (예: 실제 5mm 칸을
+  0.5mm로 잘못 입력하면 모든 측정값이 실제의 10배로, 반대로 계산하면
+  1/10로 나온다.)
 - 결과는 `data/results/<이미지이름>_calib.json`에 저장된다.
 
 ### 손톱 길이 측정
