@@ -7,4 +7,11 @@ data/results/*
 data/test_images/*
 !data/captured/.gitkeep
 !data/results/.gitkeep
+!data/results/debug
+data/results/debug/*
+!data/results/debug/.gitkeep
 !data/test_images/.gitkeep
+
+# YOLO 등 세그멘테이션 모델 가중치는 용량이 커서 git에 올리지 않는다 (자동/수동 다운로드로 받음)
+models/*
+!models/.gitkeep
