@@ -2,10 +2,11 @@
 compare_actual.py
 ==================
 [1. 역할]
-    manual_measure.py로 측정한 프로그램 측정값과, 사용자가 실제 자로 잰
-    값을 비교해서 오차(mm)와 오차율(%)을 계산한다.
-    엄지/검지/중지/약지/소지 실제 길이를 입력하면, 같은 이미지에 대해
-    저장된 최근 측정값과 비교해서 결과를 CSV로 저장한다.
+    manual_measure.py 또는 measure_auto.py로 측정한 프로그램 측정값과,
+    사용자가 실제 자로 잰 값을 비교해서 오차(mm)와 오차율(%)을 계산한다.
+    같은 사진을 여러 백엔드(manual/yolo/classical)로 측정해뒀다면,
+    백엔드별로 각각 비교 결과를 남긴다 (나중에 main.py의 --mode compare가
+    이 결과를 백엔드별로 묶어서 평균 오차를 비교하는 데 쓴다).
 
 [2. 실행 명령어]
     # 대화형으로 실제 길이를 입력하는 방식 (초보자에게 추천)
@@ -15,8 +16,11 @@ compare_actual.py
     python3 compare_actual.py --image data/captured/sample.jpg \\
         --actual thumb=12.5 index=11.0 middle=13.2 ring=12.0 pinky=9.5
 
+    # 특정 백엔드(예: yolo)로 측정한 값만 비교하고 싶을 때
+    python3 compare_actual.py --image data/captured/sample.jpg --backends yolo
+
 [3. 어디에 입력해야 하는가]
-    -> Jetson Nano 터미널(SSH 접속) 또는 화면이 없어도 실행 가능하다.
+    -> Jetson Nano 터미널(SSH 접속) 또는 노트북 터미널, 화면이 없어도 실행 가능하다.
        (이 스크립트는 마우스 클릭이 필요 없고 키보드 입력만 받는다)
 
 [4. 정상적으로 실행되면]
@@ -29,28 +33,42 @@ compare_actual.py
         약지 실제 길이(mm): 12.0
         소지 실제 길이(mm): 9.5
 
-    입력이 끝나면 손가락별 오차/오차율이 표로 출력되고 CSV로 저장된다.
+    입력이 끝나면 손가락+백엔드별 오차/오차율이 표로 출력되고 CSV로 저장된다.
 
-        [RESULT] thumb: 실제 12.5mm / 측정 12.1mm / 오차 0.4mm (3.2%)
+        [RESULT] thumb (manual): 실제 12.5mm / 측정 12.1mm / 오차 0.4mm (3.2%)
+        [RESULT] thumb (yolo): 실제 12.5mm / 측정 11.9mm / 오차 0.6mm (4.8%)
         [SAVED] data/results/comparison.csv
 
 [5. 오류가 발생하면 확인할 것]
-    - "측정 데이터가 없습니다": manual_measure.py를 먼저 실행해서
-      해당 이미지에 대한 측정값을 CSV에 저장했는지 확인
+    - "측정 데이터가 없습니다": manual_measure.py 또는 measure_auto.py를 먼저
+      실행해서 해당 이미지에 대한 측정값을 CSV에 저장했는지 확인
     - 숫자가 아닌 값을 입력해서 오류가 나면: 숫자(예: 12.5)만 입력
     - 특정 손가락만 비교하고 싶다면: --fingers thumb index 처럼 지정
+    - 특정 백엔드만 비교하고 싶다면: --backends manual 또는 --backends yolo 처럼 지정
 """
 
 import argparse
 import csv
 import os
 
-from utils import ensure_dir, FINGERS, FINGER_LABELS_KO
+from utils import append_csv_rows, FINGERS, FINGER_LABELS_KO
 
 MEASURED_CSV_DEFAULT = os.path.join("data", "results", "measurements.csv")
 COMPARISON_CSV_DEFAULT = os.path.join("data", "results", "comparison.csv")
 
-CSV_HEADER = ["image_path", "finger", "actual_mm", "measured_mm", "error_mm", "error_percent"]
+CSV_HEADER = [
+    "image_path",
+    "finger",
+    "backend",
+    "calibration_method",
+    "camera_height_mm",
+    "nail_height_mm",
+    "homography_rms_mm",
+    "actual_mm",
+    "measured_mm",
+    "error_mm",
+    "error_percent",
+]
 
 
 def parse_args():
@@ -59,7 +77,7 @@ def parse_args():
     parser.add_argument(
         "--measured-csv",
         default=MEASURED_CSV_DEFAULT,
-        help=f"manual_measure.py 결과 CSV (기본: {MEASURED_CSV_DEFAULT})",
+        help=f"manual_measure.py/measure_auto.py 결과 CSV (기본: {MEASURED_CSV_DEFAULT})",
     )
     parser.add_argument(
         "--output",
@@ -74,6 +92,12 @@ def parse_args():
         help="비교할 손가락만 선택 (기본: 5개 전부)",
     )
     parser.add_argument(
+        "--backends",
+        nargs="+",
+        default=None,
+        help="비교할 백엔드만 선택 (기본: 측정 데이터에 있는 백엔드 전부. 예: --backends manual yolo)",
+    )
+    parser.add_argument(
         "--actual",
         nargs="+",
         default=None,
@@ -84,9 +108,11 @@ def parse_args():
 
 def load_latest_measurements(csv_path, image_path):
     """
-    measurements.csv에서 image_path가 일치하는 행 중,
-    손가락별로 가장 마지막(최근)에 측정된 행만 골라서 dict로 반환한다.
-    같은 사진을 여러 번 측정했을 경우 가장 최근 값을 사용하기 위함이다.
+    measurements.csv에서 image_path가 일치하는 행들을 (손가락, 백엔드)별로
+    가장 마지막(최근) 값만 골라서 반환한다. 같은 사진을 manual/yolo 등
+    여러 백엔드로 측정해뒀다면 백엔드별로 각각 보존된다.
+
+    반환값: {finger: {backend: row_dict}}
     """
     if not os.path.exists(csv_path):
         return {}
@@ -98,7 +124,8 @@ def load_latest_measurements(csv_path, image_path):
             if row.get("image_path") != image_path:
                 continue
             finger = row.get("finger")
-            latest[finger] = float(row.get("length_mm"))
+            backend = row.get("backend") or "manual"
+            latest.setdefault(finger, {})[backend] = row
     return latest
 
 
@@ -132,24 +159,13 @@ def prompt_actual_values(fingers):
     return result
 
 
-def append_rows_to_csv(csv_path, rows):
-    ensure_dir(csv_path)
-    file_exists = os.path.exists(csv_path)
-    with open(csv_path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=CSV_HEADER)
-        if not file_exists:
-            writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
-
-
 def main():
     args = parse_args()
 
     measured = load_latest_measurements(args.measured_csv, args.image)
     if not measured:
         print(f"[ERROR] '{args.image}'에 대한 측정 데이터가 없습니다.")
-        print(f"        먼저 manual_measure.py로 측정 결과를 {args.measured_csv} 에 저장하세요.")
+        print(f"        먼저 manual_measure.py 또는 measure_auto.py로 측정 결과를 {args.measured_csv} 에 저장하세요.")
         return
 
     missing = [f for f in args.fingers if f not in measured]
@@ -179,31 +195,45 @@ def main():
             continue
 
         actual_mm = actual_values[finger]
-        measured_mm = measured[finger]
-        error_mm = abs(actual_mm - measured_mm)
-        error_percent = (error_mm / actual_mm * 100) if actual_mm != 0 else 0.0
+        backends_for_finger = measured[finger]
+        backend_names = args.backends or list(backends_for_finger.keys())
 
-        print(
-            f"[RESULT] {finger}: 실제 {actual_mm}mm / 측정 {measured_mm}mm / "
-            f"오차 {error_mm:.2f}mm ({error_percent:.1f}%)"
-        )
+        for backend in backend_names:
+            row = backends_for_finger.get(backend)
+            if row is None:
+                print(f"[WARN] '{FINGER_LABELS_KO[finger]}'의 '{backend}' 백엔드 측정값이 없어 건너뜁니다.")
+                continue
 
-        rows.append(
-            {
-                "image_path": args.image,
-                "finger": finger,
-                "actual_mm": actual_mm,
-                "measured_mm": measured_mm,
-                "error_mm": round(error_mm, 4),
-                "error_percent": round(error_percent, 2),
-            }
-        )
+            measured_mm = float(row.get("length_mm"))
+            error_mm = abs(actual_mm - measured_mm)
+            error_percent = (error_mm / actual_mm * 100) if actual_mm != 0 else 0.0
+
+            print(
+                f"[RESULT] {finger} ({backend}): 실제 {actual_mm}mm / 측정 {measured_mm}mm / "
+                f"오차 {error_mm:.2f}mm ({error_percent:.1f}%)"
+            )
+
+            rows.append(
+                {
+                    "image_path": args.image,
+                    "finger": finger,
+                    "backend": backend,
+                    "calibration_method": row.get("calibration_method", ""),
+                    "camera_height_mm": row.get("camera_height_mm", ""),
+                    "nail_height_mm": row.get("nail_height_mm", ""),
+                    "homography_rms_mm": row.get("homography_rms_mm", ""),
+                    "actual_mm": actual_mm,
+                    "measured_mm": measured_mm,
+                    "error_mm": round(error_mm, 4),
+                    "error_percent": round(error_percent, 2),
+                }
+            )
 
     if not rows:
         print("[INFO] 저장할 비교 결과가 없습니다.")
         return
 
-    append_rows_to_csv(args.output, rows)
+    append_csv_rows(args.output, rows, CSV_HEADER)
     print(f"\n[SAVED] {args.output} ({len(rows)}개 행 추가)")
 
 
