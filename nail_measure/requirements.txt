@@ -1,11 +1,21 @@
-# Jetson Nano에는 보통 OpenCV(python3-opencv)가 시스템 패키지로 이미 설치되어 있습니다.
-# JetPack 이미지의 OpenCV는 pip으로 다시 설치하면 GStreamer(CSI 카메라) 지원이
-# 빠진 버전이 깔릴 수 있으므로, 아래 opencv-python은 "시스템에 OpenCV가 전혀 없는
-# 경우"에만 설치하세요. (자세한 내용은 README.md의 '패키지 설치' 항목 참고)
+# 노트북(리눅스 랩탑) 전용 요구사항.
+# YOLO 자동 세그멘테이션(measure_auto.py --backend yolo), ChArUco 보정
+# (charuco_calibration.py), 오차 비교(compare_actual.py, main.py --mode compare)에 사용.
+#
+# Jetson Nano에는 이 파일을 설치하지 마세요 - ultralytics/PyTorch는 무겁고
+# Nano는 촬영 전용입니다. Nano에는 requirements_nano.txt를 설치하세요.
 
 numpy>=1.19.0
 
-# CSI 카메라(Raspberry Pi Camera Module 2/3, Arducam CSI)만 쓸 경우 아래 opencv-python은
-# 설치하지 마세요. Jetson Nano 기본 OpenCV(GStreamer 지원 포함)를 그대로 사용해야 합니다.
-# USB 카메라만 쓰고 시스템에 OpenCV가 없는 경우에만 주석을 해제하세요.
-# opencv-python>=4.5.0
+# ChArUco(cv2.aruco) 포함 OpenCV. 노트북은 GStreamer/CSI 카메라를 쓰지
+# 않으므로 Jetson Nano처럼 조심할 필요 없이 pip으로 편하게 설치해도 된다.
+# 이미 opencv-python(비-contrib)이 깔려 있다면 충돌 방지를 위해 먼저
+# `pip3 uninstall opencv-python opencv-python-headless`를 권장.
+opencv-contrib-python>=4.7.0
+
+# YOLOv8-seg 추론용 (손톱 자동 세그멘테이션 메인 백엔드). PyTorch가 함께 설치된다.
+ultralytics>=8.0.0
+
+# (선택) 있으면 measure_auto.py --use-mediapipe로 손 랜드마크 기반 손가락
+# 자동 라벨링을 시도한다. 없어도 x좌표 순서 자동 매칭으로 동작하므로 필수는 아니다.
+# mediapipe>=0.10.0
