@@ -46,12 +46,62 @@ def find_long_axis_endpoints(mask):
     return pts[idx_min], pts[idx_max]
 
 
-def measure_nail_from_mask(mask, homography, camera_height_mm=295.0, nail_height_mm=0.0):
+def find_vertical_axis_endpoints(mask):
     """
-    마스크 하나에 대해 뿌리/끝 후보점과 mm 길이를 계산한다.
-    반환: {"point_a", "point_b", "pixel_distance", "length_mm"} 또는 None(마스크가 비었을 때)
+    바이너리 마스크(HxW, 0/255)에서 마스크의 세로(y) 범위를 그대로 뿌리/끝으로 쓴다.
+    x좌표는 마스크 중심의 x로 고정해서, 결과적으로 완전히 수직인 직선 길이를 잰다.
+    (엄지를 제외한 4개 손가락은 사진에서 항상 세로로 곧게 나오므로, PCA 장축보다
+    이 방식이 마스크 일부 결손에 더 안정적이다)
+
+    반환값: (point_a, point_b) 각각 (x, y) numpy 배열, 마스크가 비었으면 None
     """
-    endpoints = find_long_axis_endpoints(mask)
+    ys, xs = np.nonzero(mask)
+    if len(xs) == 0:
+        return None
+    cx = float(xs.mean())
+    y_min = float(ys.min())
+    y_max = float(ys.max())
+    return np.array([cx, y_min]), np.array([cx, y_max])
+
+
+def find_horizontal_width_endpoints(mask, y_mid):
+    """
+    마스크에서 y_mid 행(정수로 반올림)의 좌우 끝점을 찾아 가로 폭의 두 점을
+    반환한다. (뿌리/끝 세로선의 중간 높이에서 가로로 선을 그어 폭을 잰다)
+    y_mid 행에 마스크 픽셀이 하나도 없으면 가장 가까운 행으로 대체한다.
+
+    반환값: (point_a, point_b) 각각 (x, y) numpy 배열, 마스크가 비었으면 None
+    """
+    ys, xs = np.nonzero(mask)
+    if len(xs) == 0:
+        return None
+
+    y_mid_int = int(round(y_mid))
+    row_ys = np.unique(ys)
+    if y_mid_int not in row_ys:
+        y_mid_int = int(row_ys[np.argmin(np.abs(row_ys - y_mid_int))])
+
+    row_xs = xs[ys == y_mid_int]
+    x_left = float(row_xs.min())
+    x_right = float(row_xs.max())
+    return np.array([x_left, float(y_mid_int)]), np.array([x_right, float(y_mid_int)])
+
+
+def measure_nail_from_mask(mask, homography, camera_height_mm=295.0, nail_height_mm=0.0, finger=None):
+    """
+    마스크 하나에 대해 뿌리/끝(세로 길이)과 폭(가로, 세로선 중간 높이 기준) 후보점과
+    mm 길이를 계산한다.
+    finger가 주어지면(5개 손가락 전부) 항상 수직(세로) 직선 길이를 잰다.
+    finger가 None(하위호환, 손가락 라벨 없이 호출된 경우)이면 PCA 장축 방식을 쓴다
+    (이 경우 가로 폭은 세로선의 중간 y를 기준으로 동일하게 계산한다).
+    반환: {"point_a", "point_b", "pixel_distance", "length_mm",
+           "width_point_a", "width_point_b", "width_pixel_distance", "width_mm"}
+    또는 None(마스크가 비었을 때)
+    """
+    if finger is None:
+        endpoints = find_long_axis_endpoints(mask)
+    else:
+        endpoints = find_vertical_axis_endpoints(mask)
     if endpoints is None:
         return None
     p1, p2 = endpoints
@@ -65,11 +115,35 @@ def measure_nail_from_mask(mask, homography, camera_height_mm=295.0, nail_height
         nail_height_mm=nail_height_mm,
     )
 
+    y_mid = (float(p1[1]) + float(p2[1])) / 2.0
+    width_endpoints = find_horizontal_width_endpoints(mask, y_mid)
+    if width_endpoints is not None:
+        w1, w2 = width_endpoints
+        width_pixel_distance = float(np.linalg.norm(w2 - w1))
+        width_mm = measure_length_mm(
+            homography,
+            (float(w1[0]), float(w1[1])),
+            (float(w2[0]), float(w2[1])),
+            camera_height_mm=camera_height_mm,
+            nail_height_mm=nail_height_mm,
+        )
+        width_point_a = (float(w1[0]), float(w1[1]))
+        width_point_b = (float(w2[0]), float(w2[1]))
+    else:
+        width_pixel_distance = None
+        width_mm = None
+        width_point_a = None
+        width_point_b = None
+
     return {
         "point_a": (float(p1[0]), float(p1[1])),
         "point_b": (float(p2[0]), float(p2[1])),
         "pixel_distance": pixel_distance,
         "length_mm": length_mm,
+        "width_point_a": width_point_a,
+        "width_point_b": width_point_b,
+        "width_pixel_distance": width_pixel_distance,
+        "width_mm": width_mm,
     }
 
 
@@ -98,12 +172,13 @@ def label_fingers_by_x_order(nail_masks, hand="right"):
         return None
 
     order = sorted(range(len(centroids)), key=lambda i: centroids[i][0])
-    # 카메라를 향해 손바닥을 편 상태로 수직 촬영했다고 가정.
-    # 오른손: 사진 왼쪽부터 소지->엄지 순, 왼손: 사진 왼쪽부터 엄지->소지 순
+    # 카메라를 향해 손등을 편 상태로 수직 촬영했다고 가정.
+    # 오른손: 사진 왼쪽부터 엄지->소지 순, 왼손: 사진 왼쪽부터 소지->엄지 순
+    # (실측 비교로 검증됨: 기존 반대 방향 가정은 틀렸었음)
     if hand == "right":
-        finger_order = ["pinky", "ring", "middle", "index", "thumb"]
-    else:
         finger_order = ["thumb", "index", "middle", "ring", "pinky"]
+    else:
+        finger_order = ["pinky", "ring", "middle", "index", "thumb"]
 
     labels = [None] * len(centroids)
     for rank, idx in enumerate(order):

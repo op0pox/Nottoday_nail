@@ -109,9 +109,16 @@ def save_debug_overlay(image, nail_masks, measured_list, debug_path):
         p1 = tuple(int(v) for v in measured["point_a"])
         p2 = tuple(int(v) for v in measured["point_b"])
         cv2.line(overlay, p1, p2, (0, 0, 255), 2)
+        if measured.get("width_point_a") is not None:
+            w1 = tuple(int(v) for v in measured["width_point_a"])
+            w2 = tuple(int(v) for v in measured["width_point_b"])
+            cv2.line(overlay, w1, w2, (255, 128, 0), 2)
+        width_str = (
+            f" w{measured['width_mm']:.1f}mm" if measured.get("width_mm") is not None else ""
+        )
         cv2.putText(
             overlay,
-            f"{nm.finger}:{measured['length_mm']:.1f}mm",
+            f"{nm.finger}:{measured['length_mm']:.1f}mm{width_str}",
             (p1[0], max(0, p1[1] - 10)),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.7,
@@ -170,31 +177,48 @@ def main():
     measured_list = []
     for nm in nail_masks:
         measured = measure_nail_from_mask(
-            nm.mask, homography, camera_height_mm=camera_height_mm, nail_height_mm=args.nail_height
+            nm.mask,
+            homography,
+            camera_height_mm=camera_height_mm,
+            nail_height_mm=args.nail_height,
+            finger=nm.finger,
         )
         measured_list.append(measured)
         if measured is None:
             print(f"[WARN] {nm.finger} 마스크에서 길이를 계산하지 못했습니다.")
             continue
 
-        print(f"[RESULT] {nm.finger}: {measured['length_mm']:.2f}mm")
-        rows.append(
-            {
-                "image_path": args.image,
-                "finger": nm.finger,
-                "root_x": round(measured["point_a"][0], 1),
-                "root_y": round(measured["point_a"][1], 1),
-                "tip_x": round(measured["point_b"][0], 1),
-                "tip_y": round(measured["point_b"][1], 1),
-                "pixel_distance": round(measured["pixel_distance"], 4),
-                "length_mm": round(measured["length_mm"], 4),
-                "calibration_method": "charuco",
-                "backend": backend.name,
-                "camera_height_mm": camera_height_mm,
-                "nail_height_mm": args.nail_height,
-                "homography_rms_mm": rms_mm,
-            }
+        width_str = (
+            f", 폭 {measured['width_mm']:.2f}mm" if measured.get("width_mm") is not None else ""
         )
+        print(f"[RESULT] {nm.finger}: 길이 {measured['length_mm']:.2f}mm{width_str}")
+        row = {
+            "image_path": args.image,
+            "finger": nm.finger,
+            "root_x": round(measured["point_a"][0], 1),
+            "root_y": round(measured["point_a"][1], 1),
+            "tip_x": round(measured["point_b"][0], 1),
+            "tip_y": round(measured["point_b"][1], 1),
+            "pixel_distance": round(measured["pixel_distance"], 4),
+            "length_mm": round(measured["length_mm"], 4),
+            "calibration_method": "charuco",
+            "backend": backend.name,
+            "camera_height_mm": camera_height_mm,
+            "nail_height_mm": args.nail_height,
+            "homography_rms_mm": rms_mm,
+        }
+        if measured.get("width_mm") is not None:
+            row.update(
+                {
+                    "width_left_x": round(measured["width_point_a"][0], 1),
+                    "width_left_y": round(measured["width_point_a"][1], 1),
+                    "width_right_x": round(measured["width_point_b"][0], 1),
+                    "width_right_y": round(measured["width_point_b"][1], 1),
+                    "width_pixel_distance": round(measured["width_pixel_distance"], 4),
+                    "width_mm": round(measured["width_mm"], 4),
+                }
+            )
+        rows.append(row)
 
     if not rows:
         print("[INFO] 저장할 측정 결과가 없습니다.")
