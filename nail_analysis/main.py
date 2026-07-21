@@ -683,7 +683,36 @@ def build_arg_parser():
     p_collect.add_argument("--front-image", default=None, help="정지 이미지 모드(개발용): 정면 이미지 경로")
     p_collect.add_argument("--side-image", default=None, help="정지 이미지 모드(개발용): 측면 이미지 경로")
 
+    p_dash = sub.add_parser(
+        "dashboard", help="촬영된 사진/측정 결과를 브라우저로 보는 읽기 전용 웹 대시보드 (Phase A)"
+    )
+    p_dash.add_argument(
+        "--host", default="0.0.0.0", help="바인딩할 호스트 (기본 0.0.0.0: 같은 LAN의 다른 기기에서 접속 가능)"
+    )
+    p_dash.add_argument("--port", type=int, default=5000)
+    p_dash.add_argument(
+        "--debug",
+        action="store_true",
+        help="Flask 디버그 모드(자동 리로드) - 개발용. 실전 LAN 노출 시 사용 금지(디버거로 임의 코드 실행 가능)",
+    )
+
     return parser
+
+
+def cmd_dashboard(args, config):
+    try:
+        from webapp.app import create_app
+    except ImportError as e:
+        raise RuntimeError(
+            "Flask가 설치되어 있지 않습니다. requirements.txt의 Flask 관련 패키지를 "
+            "설치하세요 (pip3 install -r requirements.txt).\n원본 오류: %s" % e
+        )
+    app = create_app(config)
+    print(
+        "[안내] 대시보드 서버 시작: http://%s:%d (다른 기기에서 접속하려면 %s를 Jetson의 LAN IP로 "
+        "바꿔서 접속, Ctrl+C로 종료)" % (args.host, args.port, args.host)
+    )
+    app.run(host=args.host, port=args.port, debug=args.debug)
 
 
 def main():
@@ -700,6 +729,8 @@ def main():
             cmd_analyze(args, config)
         elif args.command == "collect":
             cmd_collect(args, config)
+        elif args.command == "dashboard":
+            cmd_dashboard(args, config)
     except (RuntimeError, ValueError) as e:
         print("\n[오류] %s" % e)
         sys.exit(1)

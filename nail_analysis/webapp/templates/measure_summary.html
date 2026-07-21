@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% from "_result_fields.html" import result_fields %}
+{% block title %}measure {{ timestamp }} - nail_analysis 대시보드{% endblock %}
+{% block content %}
+
+<h2>measure {{ timestamp }}</h2>
+<p class="hint">이 실행에는 저장된 사진이 없습니다 (measure --save-data로 실행하면 사진도 저장됩니다).</p>
+
+{% if fingers %}
+  {% for finger_id, result in fingers %}
+  <section class="finger-card">
+    <h3>{{ finger_id }}</h3>
+    {{ result_fields(result) }}
+  </section>
+  {% endfor %}
+{% else %}
+<p class="empty">확정된 손가락이 없습니다.</p>
+{% endif %}
+
+{% endblock %}

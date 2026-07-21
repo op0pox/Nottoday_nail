@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}대시보드 홈 - nail_analysis{% endblock %}
+{% block content %}
+
+<section>
+  <h2>Collect Sessions <span class="count">({{ sessions|length }})</span></h2>
+  <p class="hint">measure --save-data / collect 로 저장된 세션 (사진 있음)</p>
+  {% if sessions %}
+  <table>
+    <thead><tr><th>세션</th><th>손가락 수</th></tr></thead>
+    <tbody>
+    {% for s in sessions %}
+      <tr>
+        <td><a href="{{ url_for('collect_session', session_name=s.name) }}">{{ s.name }}</a></td>
+        <td>{{ s.finger_count }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">저장된 세션이 없습니다.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Measure Runs <span class="count">({{ measure_runs|length }})</span></h2>
+  <p class="hint">measure(--save-data 없이) 실행 요약 (사진 없음)</p>
+  {% if measure_runs %}
+  <table>
+    <thead><tr><th>실행 시각</th><th>손가락 수</th></tr></thead>
+    <tbody>
+    {% for m in measure_runs %}
+      <tr>
+        <td><a href="{{ url_for('measure_detail', timestamp=m.timestamp) }}">{{ m.timestamp }}</a></td>
+        <td>{{ m.finger_count }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">저장된 measure 실행이 없습니다.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Analyze Results <span class="count">({{ analyze_results|length }})</span></h2>
+  <p class="hint">analyze 단발 실행 결과 (overlay 이미지 1장)</p>
+  {% if analyze_results %}
+  <table>
+    <thead><tr><th>finger_id</th><th>overlay</th></tr></thead>
+    <tbody>
+    {% for a in analyze_results %}
+      <tr>
+        <td><a href="{{ url_for('analyze_detail', finger_id=a.finger_id) }}">{{ a.finger_id }}</a></td>
+        <td>{{ "있음" if a.has_overlay else "없음" }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">저장된 analyze 결과가 없습니다.</p>
+  {% endif %}
+</section>
+
+{% endblock %}

@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% from "_result_fields.html" import result_fields %}
+{% block title %}{{ session_name }} - nail_analysis 대시보드{% endblock %}
+{% block head %}
+<meta http-equiv="refresh" content="5">
+{% endblock %}
+{% block content %}
+
+<h2>{{ session_name }}</h2>
+<p class="hint">5초마다 자동 새로고침됩니다 (측정 진행 중이면 새로 확정된 손가락이 곧 나타납니다).</p>
+
+{% if fingers %}
+  {% for f in fingers %}
+  <section class="finger-card">
+    <h3>{{ f.finger_id }}</h3>
+    <div class="photos">
+      {% if f.front_image %}
+      <figure>
+        <img src="{{ url_for('collect_image', session_name=session_name, filename=f.front_image) }}" alt="{{ f.finger_id }} front">
+        <figcaption>front</figcaption>
+      </figure>
+      {% endif %}
+      {% if f.side_image %}
+      <figure>
+        <img src="{{ url_for('collect_image', session_name=session_name, filename=f.side_image) }}" alt="{{ f.finger_id }} side">
+        <figcaption>side</figcaption>
+      </figure>
+      {% endif %}
+      {% if not f.front_image and not f.side_image %}
+      <p class="empty">저장된 사진이 없습니다.</p>
+      {% endif %}
+    </div>
+    {{ result_fields(f.meta) }}
+  </section>
+  {% endfor %}
+{% else %}
+<p class="empty">이 세션에는 아직 확정된 손가락이 없습니다.</p>
+{% endif %}
+
+{% endblock %}
