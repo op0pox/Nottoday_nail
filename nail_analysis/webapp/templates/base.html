@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>{% block title %}nail_analysis 대시보드{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+{% block head %}{% endblock %}
+</head>
+<body>
+<header>
+  <a class="home-link" href="{{ url_for('index') }}">nail_analysis 대시보드</a>
+</header>
+<main>
+{% block content %}{% endblock %}
+</main>
+</body>
+</html>

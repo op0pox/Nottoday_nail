@@ -20,9 +20,10 @@ Jetson Nano B01 + 듀얼 CSI 카메라(정면=바닥 내려다보기, 측면=수
 4. [ChArUco 보드 준비 및 정렬](#charuco-보드-준비-및-정렬)
 5. [전체 사용 흐름](#전체-사용-흐름)
 6. [서브커맨드](#서브커맨드)
-7. [판정 로직 요약](#판정-로직-요약)
-8. [자주 발생하는 오류](#자주-발생하는-오류)
-9. [향후 로드맵: 고전 CV → AI 세그멘테이션](#향후-로드맵-고전-cv--ai-세그멘테이션)
+7. [웹 대시보드 (읽기 전용)](#웹-대시보드-읽기-전용)
+8. [판정 로직 요약](#판정-로직-요약)
+9. [자주 발생하는 오류](#자주-발생하는-오류)
+10. [향후 로드맵: 고전 CV → AI 세그멘테이션](#향후-로드맵-고전-cv--ai-세그멘테이션)
 
 ---
 
@@ -40,7 +41,7 @@ Jetson Nano B01 + 듀얼 CSI 카메라(정면=바닥 내려다보기, 측면=수
 
 ```text
 nail_analysis/
-├── main.py                  # CLI 엔트리: calibrate / measure / analyze / collect
+├── main.py                  # CLI 엔트리: calibrate / measure / analyze / collect / dashboard
 ├── config.yaml               # 모든 임계값/상수/사이즈 테이블 (여기만 고치면 대부분의 튜닝이 끝남)
 ├── config_loader.py          # config.yaml 로더
 ├── camera.py                 # 듀얼 CSI(GStreamer) 캡처 + 정지 이미지 폴백
@@ -48,6 +49,12 @@ nail_analysis/
 ├── generate_board.py         # 인쇄용 ChArUco 보드 PNG 생성
 ├── visualize.py               # 키포인트/측정선/판정 결과 오버레이(영문 텍스트)
 ├── collect.py                 # 학습용 원본 이미지/마스크/키포인트 저장 (SAM 라벨링 준비용)
+├── generate_fake_dashboard_data.py  # (개발용) 대시보드 로컬 검증용 가짜 데이터 생성기
+├── webapp/                     # 읽기 전용 웹 대시보드 (Phase A, dashboard 서브커맨드)
+│   ├── app.py                    # Flask 라우트
+│   ├── data_sources.py            # data/collect, data/results 읽기 전용 헬퍼
+│   ├── templates/                 # Jinja2 템플릿
+│   └── static/style.css
 ├── detection/
 │   ├── base.py                 # NailSegmenter / KeypointDetector 인터페이스
 │   ├── contour.py               # 고전 CV 세그멘테이션 + 마스크→키포인트 + 수동 보정 UI
@@ -58,7 +65,8 @@ nail_analysis/
 │   ├── curve.py                  # 곡면 길이 공식
 │   └── tip_match.py              # 곡면 길이 → 팁 사이즈 매칭
 ├── tests/
-│   └── test_curve.py             # curve.py 공식 검증 (실측 케이스 + PDF 원문 표기 동치 증명)
+│   ├── test_curve.py             # curve.py 공식 검증 (실측 케이스 + PDF 원문 표기 동치 증명)
+│   └── test_webapp.py             # 대시보드 라우트 + path-traversal 방어 스모크 테스트
 ├── requirements.txt
 ├── data/
 │   ├── captured/                 # (필요 시) 원본 촬영본
@@ -182,6 +190,71 @@ ChArUco 보드를 여러 각도로 촬영(스페이스바로 캡처, 최소 2장
 자동 마스크/키포인트만 `data/collect/session_.../`에 저장한다. 향후 AI
 세그멘테이션 모델 학습 데이터를 모으기 위한 모드다. `measure --save-data`도
 내부적으로 같은 `collect.CollectSession`을 공유한다.
+
+### `dashboard`
+
+촬영된 사진과 측정 결과를 브라우저로 보는 **읽기 전용** 웹 대시보드를 띄운다.
+자세한 내용은 아래 [웹 대시보드](#웹-대시보드-읽기-전용) 절 참고.
+
+```bash
+python3 main.py dashboard
+```
+
+## 웹 대시보드 (읽기 전용)
+
+`cv2.imshow` 창은 Jetson 앞에서만 보이기 때문에, 노트북에서 SSH로 접속해서는
+촬영 화면/결과를 보기 불편했다. `dashboard` 서브커맨드는 이미 저장된
+사진·결과 파일을 그대로 읽어서 브라우저로 보여주는 **읽기 전용** 웹 서버를
+띄운다 — 촬영/계산 로직은 전혀 건드리지 않고, 카메라도 직접 열지 않으므로
+`measure --save-data`와 동시에 다른 터미널에서 실행해도 충돌하지 않는다.
+
+> 촬영 자체를 브라우저에서 원격으로 조작하는 것(실시간 카메라 스트리밍 포함)은
+> 범위 밖이다(추후 "Phase B"로 별도 진행 예정). 이 대시보드는 이미 저장된
+> 파일을 보여주기만 하며, 세션 페이지는 5초마다 자동 새로고침되어 진행 중인
+> `measure --save-data` 촬영 결과가 곧 반영된다.
+
+### Jetson에서 실행 (실전)
+
+```bash
+cd nail_analysis
+pip3 install -r requirements.txt   # Flask 계열이 추가로 설치된다 (opencv/GStreamer와 무관)
+python3 main.py dashboard          # 기본 0.0.0.0:5000
+```
+
+같은 LAN의 노트북에서 Jetson의 IP를 알아내려면 Jetson에서 `hostname -I`를
+실행한다. 노트북 브라우저로 `http://<jetson-ip>:5000`에 접속한다.
+
+**주의**: `--debug` 옵션은 로컬 개발용이다. LAN에 노출된 상태로 실행할 때는
+절대 켜지 말 것 — Flask의 디버거는 원격에서 임의 코드를 실행할 수 있는
+통로가 될 수 있다.
+
+### 로컬 PC에서 미리 확인해보기 (Jetson/실측 데이터 없이)
+
+Jetson도 없고 아직 촬영한 데이터도 없는 상태에서 대시보드 화면만 먼저
+보고 싶다면, 가짜 데이터 생성기로 검증할 수 있다:
+
+```bash
+cd nail_analysis
+pip3 install -r requirements.txt
+python3 generate_fake_dashboard_data.py   # data/collect, data/results에 가짜 세션/결과 생성
+python3 main.py dashboard --debug         # http://127.0.0.1:5000
+```
+
+생성된 데이터는 파일명에 `_fake`가 붙거나 이미지에 "FAKE DATA (dev only)"가
+찍혀 있어 실측 데이터와 구분된다. 확인이 끝나면 `data/collect/session_*_fake`,
+`data/results/analyze_*`, `data/results/measure_*.json`을 지우면 된다
+(어차피 `.gitignore`로 git에는 올라가지 않는다).
+
+### 데이터 소스별로 보이는 내용이 다름
+
+| 실행 방식 | 대시보드에 뜨는 곳 | 사진 |
+|---|---|---|
+| `measure --save-data` 또는 `collect` | Collect Sessions | 있음 (정면/측면) |
+| `measure` (옵션 없이) | Measure Runs | 없음 |
+| `analyze` | Analyze Results | overlay 1장(정면+측면 합성) |
+
+**사진까지 대시보드에서 보고 싶다면 반드시 `--save-data`를 붙여서 `measure`를
+실행해야 한다** — 옵션 없이 실행하면 요약 JSON만 저장되고 사진은 저장되지 않는다.
 
 ## 판정 로직 요약
 

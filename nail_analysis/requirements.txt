@@ -22,3 +22,16 @@ PyYAML>=5.3
 
 # [노트북/PC, 카메라 없이 --front-image/--side-image/--images로 정지 이미지 모드만
 # 쓰는 경우] 시스템에 OpenCV가 전혀 없다면 위 주석을 해제해서 설치한다.
+
+# 읽기 전용 웹 대시보드(dashboard 서브커맨드, webapp/)용 의존성.
+# Jetson Nano(Python 3.6.9)와 호환되는 마지막 세대 버전으로 고정한다 - Flask/Werkzeug 2.1,
+# Jinja2 3.1, itsdangerous 2.1, click 8.1, MarkupSafe 2.1은 모두 Python 3.7+부터만 지원한다.
+# 카메라/GStreamer와는 무관한 순수 Python 패키지라 위 opencv-contrib-python 같은 충돌은 없다.
+# dashboard를 안 쓸 거면 설치하지 않아도 나머지 서브커맨드(calibrate/measure/analyze/collect)는
+# 정상 동작한다(webapp은 지연 import).
+Flask==2.0.3
+Werkzeug==2.0.3
+Jinja2==3.0.3
+itsdangerous==2.0.1
+click==8.0.4
+MarkupSafe==2.0.1
