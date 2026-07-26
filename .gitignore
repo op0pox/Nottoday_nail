@@ -1,0 +1,10 @@
+# OS / 에디터
+.DS_Store
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/

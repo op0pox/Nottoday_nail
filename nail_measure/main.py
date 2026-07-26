@@ -24,6 +24,9 @@ main.py
     python3 main.py --mode measure-manual --image data/captured/sample.jpg
     python3 main.py --mode measure-auto --image data/captured/sample.jpg --backend yolo --conf 0.2
     python3 main.py --mode compare   # 백엔드별 평균 오차 요약 (comparison.csv 전체 집계)
+    python3 main.py --mode measure-curve --front data/captured/front_thumb.jpg \
+        --side data/captured/side_thumb.jpg --finger thumb --type P
+    python3 main.py --mode compare-curve --front data/captured/front_thumb.jpg --finger thumb --actual-curve 21.5
 
 [3. 어디에 입력해야 하는가]
     -> Jetson Nano 터미널(SSH 접속) 또는 노트북 터미널에서 실행한다.
@@ -46,6 +49,8 @@ main.py
         7. 촬영 조건(높이 등) 기록
         8. 높이별 평균 오차 요약
         9. 백엔드별 평균 오차 비교
+        10. 손톱 곡면 너비 측정 (정면+측면 사진)
+        11. 곡면 실측값과 비교
         0. 종료
         번호를 선택하세요:
 
@@ -67,6 +72,9 @@ import subprocess
 import sys
 from collections import defaultdict
 
+from utils import FINGERS
+from curve_config import NAIL_TYPES
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CAMERA_HEIGHT_MM = 295.0
 DEFAULT_COMPARISON_CSV = os.path.join("data", "results", "comparison.csv")
@@ -76,7 +84,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="손톱 길이 측정 프로그램 - 통합 메뉴")
     parser.add_argument(
         "--mode",
-        choices=["capture", "calibrate", "measure-manual", "measure-auto", "compare"],
+        choices=["capture", "calibrate", "measure-manual", "measure-auto", "compare", "measure-curve", "compare-curve"],
         default=None,
         help="지정하면 메뉴 없이 해당 기능 하나만 실행하고 종료한다 (생략하면 메뉴 모드)",
     )
@@ -101,6 +109,19 @@ def parse_args():
     )
     parser.add_argument(
         "--comparison-csv", default=DEFAULT_COMPARISON_CSV, help="백엔드별 오차 비교에 쓸 comparison.csv 경로"
+    )
+    parser.add_argument("--front", default=None, help="measure-curve/compare-curve용 정면 사진 경로")
+    parser.add_argument("--front-calib", default=None, help="정면 사진용 보정 JSON 경로 (생략하면 이미지 이름으로 추정)")
+    parser.add_argument("--side", default=None, help="measure-curve용 측면 사진 경로")
+    parser.add_argument("--side-calib", default=None, help="측면 사진용 보정 JSON 경로 (생략하면 이미지 이름으로 추정)")
+    parser.add_argument("--finger", choices=FINGERS, default=None, help="measure-curve/compare-curve에서 측정할 손가락 1개")
+    parser.add_argument("--type", dest="nail_type", choices=NAIL_TYPES, default="P", help="measure-curve용 손톱 유형 (기본 P)")
+    parser.add_argument("--tips-csv", default=None, help="measure-curve용 팁 사이즈 전개도 테이블 CSV (선택)")
+    parser.add_argument("--actual-curve", type=float, default=None, help="compare-curve용 실제 곡면 너비(mm), 생략하면 대화형 입력")
+    parser.add_argument(
+        "--curve-measured-csv",
+        default=os.path.join("data", "results", "curve_measurements.csv"),
+        help="compare-curve가 참조할 measure_curve.py 결과 CSV",
     )
     return parser.parse_args()
 
@@ -200,6 +221,44 @@ def menu_compare_actual(defaults):
     run_script("compare_actual.py", ["--image", image])
 
 
+def menu_measure_curve(defaults):
+    front = ask("정면 사진 경로", defaults["front"])
+    if not front:
+        print("[ERROR] 정면 사진 경로가 필요합니다.")
+        return
+    front_calib = ask("정면 보정 JSON 경로", defaults["front_calib"] or _default_calib_path(front))
+    side = ask("측면 사진 경로", defaults["side"])
+    if not side:
+        print("[ERROR] 측면 사진 경로가 필요합니다.")
+        return
+    side_calib = ask("측면 보정 JSON 경로", defaults["side_calib"] or _default_calib_path(side))
+    finger = ask(f"측정할 손가락 ({'/'.join(FINGERS)})", defaults["finger"] or "thumb")
+    nail_type = ask(f"손톱 유형 ({'/'.join(NAIL_TYPES)})", defaults["nail_type"])
+    nail_height = ask("보드~손톱 높이(mm, 시차보정)", str(defaults["nail_height"]))
+
+    args_list = [
+        "--front", front,
+        "--front-calib", front_calib,
+        "--side", side,
+        "--side-calib", side_calib,
+        "--finger", finger,
+        "--type", nail_type,
+        "--nail-height", nail_height,
+    ]
+    if defaults["tips_csv"]:
+        args_list += ["--tips-csv", defaults["tips_csv"]]
+    run_script("measure_curve.py", args_list)
+
+
+def menu_compare_curve(defaults):
+    front = ask("비교할 정면 사진 경로", defaults["front"])
+    if not front:
+        print("[ERROR] 정면 사진 경로가 필요합니다.")
+        return
+    finger = ask(f"비교할 손가락 ({'/'.join(FINGERS)})", defaults["finger"] or "thumb")
+    run_script("compare_curve.py", ["--front", front, "--finger", finger])
+
+
 def menu_experiment_log(defaults):
     image = ask("촬영 조건을 기록할 이미지 경로", defaults["image"])
     if not image:
@@ -249,6 +308,8 @@ def print_menu():
     print("7. 촬영 조건(높이 등) 기록")
     print("8. 높이별 평균 오차 요약")
     print("9. 백엔드별 평균 오차 비교")
+    print("10. 손톱 곡면 너비 측정 (정면+측면 사진)")
+    print("11. 곡면 실측값과 비교")
     print("0. 종료")
 
 
@@ -343,6 +404,36 @@ def dispatch_mode(args):
         print_backend_comparison(args.comparison_csv)
         return
 
+    if args.mode == "measure-curve":
+        if not (args.front and args.side and args.finger):
+            print("[ERROR] --mode measure-curve 에는 --front, --side, --finger가 필요합니다.")
+            return
+        front_calib = args.front_calib or _default_calib_path(args.front)
+        side_calib = args.side_calib or _default_calib_path(args.side)
+        cmd = [
+            "--front", args.front,
+            "--front-calib", front_calib,
+            "--side", args.side,
+            "--side-calib", side_calib,
+            "--finger", args.finger,
+            "--type", args.nail_type,
+            "--nail-height", str(args.nail_height),
+        ]
+        if args.tips_csv:
+            cmd += ["--tips-csv", args.tips_csv]
+        run_script("measure_curve.py", cmd)
+        return
+
+    if args.mode == "compare-curve":
+        if not (args.front and args.finger):
+            print("[ERROR] --mode compare-curve 에는 --front, --finger가 필요합니다.")
+            return
+        cmd = ["--front", args.front, "--finger", args.finger, "--measured-csv", args.curve_measured_csv]
+        if args.actual_curve is not None:
+            cmd += ["--actual", str(args.actual_curve)]
+        run_script("compare_curve.py", cmd)
+        return
+
 
 def main():
     args = parse_args()
@@ -362,6 +453,13 @@ def main():
         "hand": args.hand,
         "nail_height": args.nail_height,
         "comparison_csv": args.comparison_csv,
+        "front": args.front,
+        "front_calib": args.front_calib,
+        "side": args.side,
+        "side_calib": args.side_calib,
+        "finger": args.finger,
+        "nail_type": args.nail_type,
+        "tips_csv": args.tips_csv,
     }
 
     handlers = {
@@ -374,6 +472,8 @@ def main():
         "7": menu_experiment_log,
         "8": menu_experiment_summary,
         "9": menu_backend_compare,
+        "10": menu_measure_curve,
+        "11": menu_compare_curve,
     }
 
     while True:

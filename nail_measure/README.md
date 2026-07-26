@@ -25,9 +25,10 @@ ArUco 마커)을 자동 인식해서 이미지<->mm 호모그래피를 계산한
 6. [전체 실행 흐름](#전체-실행-흐름)
 7. [단계별 실행 방법](#단계별-실행-방법)
 8. [Nano 촬영 -> 노트북 측정 워크플로](#nano-촬영--노트북-측정-워크플로)
-9. [결과 CSV 확인 방법](#결과-csv-확인-방법)
-10. [자주 발생하는 오류와 해결 방법](#자주-발생하는-오류와-해결-방법)
-11. [모델 정확도가 부족할 때](#모델-정확도가-부족할-때)
+9. [손톱 곡면 너비 측정 (곡면 길이)](#손톱-곡면-너비-측정-곡면-길이)
+10. [결과 CSV 확인 방법](#결과-csv-확인-방법)
+11. [자주 발생하는 오류와 해결 방법](#자주-발생하는-오류와-해결-방법)
+12. [모델 정확도가 부족할 때](#모델-정확도가-부족할-때)
 
 ---
 
@@ -59,6 +60,11 @@ nail_measure/
 ├── grid_calibration.py      # [v1] 모눈 두 점 클릭 -> px_per_mm 계산 (예전 방식, 계속 사용 가능)
 ├── manual_measure.py        # 5개 손가락 손톱 길이 수동 클릭 측정 (호모그래피 기반)
 ├── measure_auto.py          # [v2] 세그멘테이션 백엔드(yolo/classical/manual)로 자동 측정
+├── curve_config.py          # 손톱 유형(P/S/B/C)별 곡면 계산 상수 (실험 중인 가설값, 재실험 시 여기만 수정)
+├── curve_math.py            # 곡면 길이 계산 순수 함수 + 자체 테스트 (python3 curve_math.py로 실행)
+├── measure_curve.py         # 정면+측면 사진 2장으로 손톱 곡면 너비(곡면 길이) 수동 클릭 측정
+├── compare_curve.py         # 곡면 실측값(줄자 등)과 measure_curve.py 결과 비교(오차/오차율)
+├── curve_classify.py        # [Phase 2, 선택] 클릭한 키포인트로 P/S/B/C 유형 자동 판정
 ├── segmentation/
 │   ├── common.py             # NailMask / SegmentationBackend 공통 인터페이스
 │   ├── dl_yolo.py             # (메인) 사전학습 YOLOv8-seg 모델 다운로드+추론
@@ -446,6 +452,135 @@ python3 compare_actual.py --image data/captured/capture_20260704_101500.jpg
 
 ---
 
+## 손톱 곡면 너비 측정 (곡면 길이)
+
+`manual_measure.py`가 손톱 뿌리~끝의 **길이**를 재는 것과 달리,
+`measure_curve.py`는 손톱을 원의 일부(호)로 근사해서 손톱 **곡면을
+펼쳤을 때의 너비**(곡면 길이)를 계산하는 별도 기능이다(Phase 1). 기존
+길이 측정 워크플로와 독립적으로 동작하며, 아래 촬영 프로토콜만 지키면
+`manual_measure.py` 없이 이 기능만 단독으로 써도 된다.
+
+### 촬영 프로토콜 (카메라 1대 전제)
+
+- 카메라가 CSI 모듈 한 대뿐이라 정면/측면을 동시에 못 찍는다. **같은
+  손가락**을 아래 순서로 나눠 찍는다.
+  1. 손가락을 평소처럼(손등이 위로) ChArUco 보드 위에 올리고 **정면**
+     사진 촬영 -> `charuco_calibration.py`로 그 사진 전용 보정 JSON 생성
+  2. 같은 손가락을 옆으로 눕혀(손날이 보드에 닿게) **측면** 사진 촬영 ->
+     역시 그 사진 전용 보정 JSON 생성
+- 카메라 위치가 두 촬영 사이에 달라질 수 있으므로, **사진마다 별도의
+  보정 JSON**을 반드시 만들어서 각각 `--front-calib`/`--side-calib`에
+  넣는다 (같은 JSON을 재사용하지 않는다).
+- 카메라 높이(29.5cm 고정) 셋업은 정면/측면 촬영 모두 그대로 재사용한다.
+- 측정은 손가락 1개 단위로 진행한다 (`--finger thumb|index|middle|ring|pinky`).
+
+### 곡면 너비 측정 - 수동 클릭
+
+```bash
+python3 measure_curve.py \
+  --front data/captured/front_thumb.jpg  --front-calib data/results/front_thumb_charuco.json \
+  --side  data/captured/side_thumb.jpg   --side-calib  data/results/side_thumb_charuco.json \
+  --finger thumb --type P
+```
+
+- 정면 사진에서 손톱 좌/우 최대너비 2점, 측면 사진에서 손톱 커브가
+  만드는 폭 2점을 순서대로 클릭한다 (`r`=마지막 점 되돌리기, `q`=취소,
+  `manual_measure.py`와 같은 조작).
+- `--type P|S|B|C` (기본값 `P`)로 손톱 유형을 직접 지정한다. 유형별
+  비율은 `curve_config.py`의 `NAIL_TYPE_PARAMS`에 분리돼 있어서, 코드를
+  건드리지 않고 이 값만 바꿔서 재실험할 수 있다 (특히 B형 비율은 자료
+  간 표기가 엇갈려 불확실한 가설값이니 참고).
+- 계산 중간값(a, b, c, h, r, theta, L)을 모두 터미널에 출력하고,
+  결과를 `data/results/curve_measurements.csv`에 누적 저장한다.
+- 클릭 지점을 표시한 디버그 이미지를 `data/results/debug/`에
+  `<정면이미지명>_<손가락>_curve_front.jpg` /
+  `<측면이미지명>_<손가락>_curve_side.jpg`로 저장한다.
+- `--tips-csv <경로>`로 `type,size_no,max_width_mm` 컬럼을 가진 팁
+  사이즈 전개도 테이블을 주면, 계산된 곡면 길이와 가장 가까운 사이즈를
+  찾아 함께 출력·저장한다 (선택 기능, 안 주면 곡면 길이만 계산).
+
+```text
+[RESULT] 엄지(P형) front_width=15.02mm side_width=8.11mm
+         a=3.00mm b=8.11mm c=8.65mm h=2.16mm r=5.42mm theta=1.641rad L=8.89mm
+         curve_length = 20.78mm
+[SAVED] data/results/curve_measurements.csv
+```
+
+### 유형 자동 분류 (Phase 2, 선택)
+
+`--type`에 P/S/B/C를 직접 넣는 대신 `--type auto`를 주면, 곡면 너비 클릭(정면
+2점+측면 2점)에 이어서 분류용 클릭(정면 사다리꼴 4점 + 측면 마름모꼴 4점)을
+추가로 받아 유형을 자동 판정한 뒤 그 유형으로 곡면 길이까지 이어서
+계산한다. **완전 자동 디텍션이 아니라 "키포인트는 사람이 클릭, 판정만
+자동"** 단계다.
+
+```bash
+python3 measure_curve.py \
+  --front data/captured/front_thumb.jpg  --front-calib data/results/front_thumb_charuco.json \
+  --side  data/captured/side_thumb.jpg   --side-calib  data/results/side_thumb_charuco.json \
+  --finger thumb --type auto
+```
+
+- 정면: 손톱 좌/우 변의 위/아래 4점(사다리꼴 꼭짓점)을 클릭 -> 좌우 변의
+  평균 기울기를 계산해서 0~1(거의 평행)이면 측면 판정으로, 1~3(사다리꼴)이면
+  S형으로 바로 확정한다.
+- 측면(정면이 평행 후보일 때만): 최대너비점(3번) -> 곡률점(4번) -> 살
+  끝점(5번) -> 손톱 끝점(10번) 순서로 4점을 클릭 -> ChArUco 호모그래피로
+  mm 변환한 상대 높이로 P/B/C를 구분한다.
+- 임계값(기울기 0~1, 1~3 등)은 `curve_config.py`의
+  `CLASSIFICATION_THRESHOLDS`에 분리돼 있다.
+- 판정 결과와 근거(기울기 값, 상대 높이 차이)는 터미널에 출력되고
+  `data/results/type_classification.csv`에 누적 저장된다 (나중에 사람
+  판정 vs 자동 판정을 비교해서 가설을 검증하는 데 쓴다).
+
+```text
+[CLASSIFY] 판정 결과: P형
+           근거: {'front_slope': 0.42, 'diff_34_mm': 1.85, 'reason': '4번이 3번보다 높고, 손톱 끝(10)이 살 끝(5)보다 낮음 -> P형'}
+[SAVED] data/results/type_classification.csv
+```
+
+> **주의**: P형/B형을 가르는 기준("손톱 끝(10)이 살 끝(5)보다 낮음" vs
+> "높거나 같음")은 원문 자료의 표현이 사실상 같은 방향을 가리키고 있어,
+> `curve_classify.py`에서는 둘을 서로 배타적인 이분류가 되도록 해석해서
+> 구현했다. 이 해석 자체도 검증 전 가설이므로, 실측 데이터를 쌓아서
+> 사람이 눈으로 판정한 유형과 비교해보고 필요하면 `curve_config.py`의
+> 임계값이나 `curve_classify.py`의 판정 로직을 조정해야 한다.
+
+### 곡면 실측값과 비교
+
+줄자/유연자로 잰 실제 곡면 너비(mm)를 입력하면 오차·오차율을 계산해서
+`data/results/curve_comparison.csv`에 누적 저장한다 (`compare_actual.py`와
+같은 패턴).
+
+```bash
+python3 compare_curve.py --front data/captured/front_thumb.jpg --finger thumb
+# 또는 --actual로 바로 지정
+python3 compare_curve.py --front data/captured/front_thumb.jpg --finger thumb --actual 21.5
+```
+
+### 계산 로직 자체 테스트
+
+`curve_math.py`는 UI와 분리된 순수 계산 모듈이라 단독으로 실행해서
+공식이 올바르게 조합됐는지 확인할 수 있다.
+
+```bash
+python3 curve_math.py
+# [OK] curve_math.py 자체 테스트 전부 통과
+```
+
+### main.py 통합 메뉴에서 실행
+
+```bash
+python3 main.py --mode measure-curve --front data/captured/front_thumb.jpg \
+  --side data/captured/side_thumb.jpg --finger thumb --type P
+python3 main.py --mode compare-curve --front data/captured/front_thumb.jpg --finger thumb --actual-curve 21.5
+```
+
+메뉴 모드(`python3 main.py`)에서는 `10. 손톱 곡면 너비 측정`,
+`11. 곡면 실측값과 비교` 번호로 동일하게 실행할 수 있다.
+
+---
+
 ## 결과 CSV 확인 방법
 
 Nano/노트북 어느 터미널에서든 바로 내용을 볼 수 있다.
@@ -454,6 +589,9 @@ Nano/노트북 어느 터미널에서든 바로 내용을 볼 수 있다.
 cat data/results/measurements.csv
 cat data/results/comparison.csv
 cat data/results/experiment_log.csv
+cat data/results/curve_measurements.csv
+cat data/results/curve_comparison.csv
+cat data/results/type_classification.csv   # --type auto(Phase 2)를 썼다면
 ```
 
 디버그 이미지(보정/자동측정 결과를 눈으로 확인)는 `data/results/debug/`에 저장된다.
@@ -495,6 +633,11 @@ scp jetson사용자명@Jetson_IP:~/nail_measure/data/results/debug/*.jpg ./
 | `height_experiment.py summary`에서 표본이 안 잡힘 | `height_experiment.py log`로 이미지별 높이를 먼저 기록했는지, CSV들의 `image_path` 값이 서로 동일한 문자열인지 확인 |
 | 사진이 뿌옇게 나옴 | Auto Focus 카메라의 초점이 안 맞은 상태. 초점이 맞을 때까지 기다리거나 살짝 흔들어 재초점, 렌즈 보호 필름 제거 여부 확인 |
 | 손톱 뿌리/끝 위치를 잘못 클릭함 | 클릭 도중 `r` 키로 마지막 점 되돌리기, 전체를 취소하려면 `q` |
+| `measure_curve.py`에서 `수직 높이(h)가 0 이하입니다` / `반지름(r)이 0 이하입니다` | 정면/측면 클릭 위치가 실제 손톱 너비 양 끝이 맞는지, `--front`/`--side` 사진을 서로 바꿔 넣지 않았는지 확인 |
+| `measure_curve.py` 곡면 길이 값이 이상함 | `--type`(P/S/B/C)이 실제 눈으로 본 유형과 맞는지, `curve_config.py`의 `NAIL_TYPE_PARAMS` 값이 최신 가설값인지 확인 (특히 B형은 불확실 표시돼 있음) |
+| `compare_curve.py`에서 `곡면 측정 데이터가 없습니다` | `measure_curve.py`를 먼저 실행했는지, `--front`/`--finger` 값이 `curve_measurements.csv`에 저장된 값과 정확히 같은지 확인 (여러 유형으로 재측정했다면 `--type`으로 좁혀볼 것) |
+| `--tips-csv`를 줬는데 팁 매칭 결과(`[MATCH]`)가 안 뜸 | CSV 안에 현재 `--type`과 같은 `type` 값을 가진 행이 있는지, 컬럼명이 `type,size_no,max_width_mm`인지 확인 |
+| `--type auto`에서 `유형 자동 분류에 실패했습니다 (판정 불가)` | 정면 4점/측면 4점을 정확한 순서로 클릭했는지 확인. 그래도 안 되면 `--type`을 P/S/B/C 중 하나로 수동 지정해서 진행 (자동 분류는 실험 중인 가설임) |
 
 ---
 
