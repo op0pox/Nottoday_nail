@@ -90,9 +90,9 @@ export default function NailMeasurement() {
                 {measurementResults.map((res, index) => {
                   if (!res.contours) return null;
 
-                  const d = res.contours.map(cnt =>
-                    `M ${cnt.map(p => p.join(',')).join(' L ')} Z`
-                  ).join(' ');
+                  const d = res.contours.map((cnt: number[][]) =>
+    `M ${cnt.map((p: number[]) => p.join(',')).join(' L ')} Z`
+  ).join(' ');
 
                   return (
                     <g key={index}>
