@@ -1,11 +1,21 @@
 import uvicorn
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from api.api import router as measure_router
 
-# 전체 애플리케이션 객체 생성
+# FastAPI 객체 생성
 app = FastAPI(title="Nail Measurement API")
 
-# 분리된 라우터를 메인 앱에 등록
+# cors문제 해결
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 실제 배포 시에는 프론트엔드 주소만 넣는 것이 좋지만 개발 중에는 "*"로 허용
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# api라우터
 app.include_router(measure_router)
 
 if __name__ == "__main__":

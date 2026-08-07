@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from segmentation.nail_segmentation import YoloNailBackend, measure_nail_from_mask, label_fingers_by_x_order
 
@@ -31,7 +31,8 @@ class MeasurementResult(BaseModel):
     finger: str
     length_mm: float
     width_mm: Optional[float] = None
-
+    contours: Optional[List[List[Tuple[int, int]]]] = None  # 다각형 좌표 리스트 추가
+    
 # @app.post 대신 @router.post를 사용합니다.
 @router.post("/measure", response_model=List[MeasurementResult])
 async def measure_nails(
@@ -74,6 +75,19 @@ async def measure_nails(
 
     results = []
     for nm in nail_masks:
+        # 1. 마스크를 컨투어(다각형) 좌표로 변환
+        # nm.mask는 uint8 binary mask 가정
+        contours, _ = cv2.findContours(nm.mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        formatted_contours = []
+        for cnt in contours:
+            # 좌표를 (N, 1, 2) 형태에서 (N, 2) 리스트로 변환
+            cnt_list = cnt.squeeze().tolist()
+            if not isinstance(cnt_list[0], list): # 점이 1개인 경우 예외 처리
+                 cnt_list = [cnt_list]
+            formatted_contours.append(cnt_list)
+
+        # 2. 측정 수행
         measured = measure_nail_from_mask(
             nm.mask,
             H,
@@ -81,11 +95,14 @@ async def measure_nails(
             nail_height_mm=NAIL_HEIGHT_MM,
             finger=nm.finger
         )
+        
+        # 3. 결과에 컨투어 정보 포함하여 전송
         if measured:
             results.append(MeasurementResult(
                 finger=nm.finger,
                 length_mm=round(measured["length_mm"], 2),
-                width_mm=round(measured["width_mm"], 2) if measured.get("width_mm") is not None else None
+                width_mm=round(measured["width_mm"], 2) if measured.get("width_mm") is not None else None,
+                contours=formatted_contours  # 사각형 대신 다각형 좌표 전달
             ))
 
     return results
