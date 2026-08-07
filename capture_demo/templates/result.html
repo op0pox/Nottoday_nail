@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}측정 결과{% endblock %}
+{% block content %}
+  <h1>측정 결과</h1>
+  <h2>{{ '오른손' if hand == 'right' else '왼손' }} · 5개 손톱</h2>
+  <table>
+    <tr><th>손가락</th><th>가로(mm)</th><th>세로(mm)</th><th>측면(mm)</th><th>유형</th><th>곡면길이(mm)</th></tr>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.label }}</td>
+      <td>{{ "%.2f"|format(r.front_width_mm) }}</td>
+      <td>{{ "%.2f"|format(r.front_length_mm) }}</td>
+      <td>{{ "%.2f"|format(r.side_width_mm) }}</td>
+      <td>{{ r.type }}</td>
+      <td><b>{{ "%.2f"|format(r.curve_length_mm) }}</b></td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted">
+    P형 곡면길이는 실측 보정계수(0.86)가 적용된 값입니다. B/S/C형은 아직 실측
+    보정 데이터가 없어 원래 공식 그대로입니다.
+  </p>
+
+  <h2 style="margin-top:28px;">손가락별 인식 결과</h2>
+  {% for r in rows %}
+    <p class="desc" style="font-weight:600; margin-bottom:4px;">{{ r.label }}</p>
+    <div style="display:flex; gap:8px; margin-bottom:16px;">
+      {% if r.front_debug_image %}
+        <img src="{{ url_for('session_photo', sid=sid, filename=r.front_debug_image) }}" style="width:50%; border-radius:8px;">
+      {% endif %}
+      {% if r.side_debug_image %}
+        <img src="{{ url_for('session_photo', sid=sid, filename=r.side_debug_image) }}" style="width:50%; border-radius:8px;">
+      {% endif %}
+    </div>
+  {% endfor %}
+
+  <a class="btn" href="{{ url_for('index') }}">새로 측정하기</a>
+{% endblock %}

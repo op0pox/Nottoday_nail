@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}{{ finger_label }} 촬영{% endblock %}
+{% block content %}
+  <h1>{{ finger_label }} ({{ total_count - remaining_count + 1 }}/{{ total_count }})</h1>
+  <p class="desc">
+    <b>정면</b>: 손가락을 위에서 내려다보며, 보드 위에 손톱이 보이게 촬영.<br>
+    <b>측면</b>: 같은 손가락을 <b>90도 옆으로 뉘어서</b> 손날이 보드에 닿게 놓고,
+    옆에서 촬영 — 손톱 윗면이 아니라 <b>둥근 옆모습</b>이 보여야 합니다.<br>
+    <b>공통(중요)</b>: 정면·측면 둘 다 <b>손톱 끝이 사진 위쪽</b>을 향하게,
+    손가락 전체가 아니라 <b>손톱 주변만 가깝게</b> 찍어주세요 — 손톱만 자동으로
+    구분하는 기준이 "사진 위쪽 = 손톱 끝"이라서, 반대로 찍으면 손톱이 아닌
+    곳을 잘못 잡을 수 있습니다.
+  </p>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+  <form action="{{ url_for('finger_step', sid=sid) }}" method="post" enctype="multipart/form-data">
+    <input type="hidden" name="finger" value="{{ finger }}">
+    <label>손톱 유형 (P/B/S/C)</label>
+    <select name="type" required>
+      {% for t in types %}<option value="{{ t }}">{{ t }}형</option>{% endfor %}
+    </select>
+    <label>{{ finger_label }} 정면사진</label>
+    <input type="file" name="front_photo" accept="image/*" required>
+    <label>{{ finger_label }} 측면사진</label>
+    <input type="file" name="side_photo" accept="image/*" required>
+    <button type="submit">업로드 &amp; 자동 측정</button>
+  </form>
+{% endblock %}

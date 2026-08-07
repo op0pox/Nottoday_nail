@@ -56,15 +56,18 @@ FONT = 'Helvetica'
 
 
 # ── 유형별 계산 비율 ─────────────────────────────────────────────────────────
+# k_cal: 실측 보정 계수. 원래 공식(k_cal=1.0)이 실측값보다 구조적으로 크게 나와서
+# 추가한 값. P형은 실측 5건(검지/2번째/소지/5번째/6번째, 엄지 제외) 대비 계산값을
+# 최소제곱으로 피팅해 0.86으로 보정. B/S/C는 아직 실측 데이터가 없어 1.0(보정 없음).
 TYPES = {
     "P": dict(name="P형 (평행)", k_a=2 / 5, k_a_s="2/5",
-              k_h=1 / 4, k_h_s="1/4", k_f=1 / 2, k_f_s="1/2"),
+              k_h=1 / 4, k_h_s="1/4", k_f=1 / 2, k_f_s="1/2", k_cal=0.86),
     "B": dict(name="B형 (버드)", k_a=3 / 8, k_a_s="3/8",
-              k_h=1 / 6, k_h_s="1/6", k_f=2 / 3, k_f_s="2/3"),
+              k_h=1 / 6, k_h_s="1/6", k_f=2 / 3, k_f_s="2/3", k_cal=1.0),
     "S": dict(name="S형 (부채)", k_a=3 / 7, k_a_s="3/7",
-              k_h=1 / 7, k_h_s="1/7", k_f=1 / 3, k_f_s="1/3"),
+              k_h=1 / 7, k_h_s="1/7", k_f=1 / 3, k_f_s="1/3", k_cal=1.0),
     "C": dict(name="C형 (평행)", k_a=3 / 7, k_a_s="3/7",
-              k_h=1 / 5, k_h_s="1/5", k_f=1 / 3, k_f_s="1/3"),
+              k_h=1 / 5, k_h_s="1/5", k_f=1 / 3, k_f_s="1/3", k_cal=1.0),
 }
 CATEGORY_ORDER = ["P", "B", "S", "C"]
 
@@ -82,7 +85,7 @@ def calc(category: str, front_width: float, side_width: float) -> dict:
     theta = 2 * math.atan2(c / 2, r - h)
     L = r * theta
     flat = p["k_f"] * a
-    total = 2 * L + flat
+    total = (2 * L + flat) * p["k_cal"]  # 보정: 실측 대비 과대추정 경향을 k_cal로 보정
     return dict(
         category=category, name=p["name"],
         front_width=front_width, side_width=side_width,

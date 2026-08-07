@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}손톱 측정 시작{% endblock %}
+{% block content %}
+  <h1>손톱 자동 측정</h1>
+  <h2>정면 그룹사진 1장 + 측면사진 5장</h2>
+  <p class="desc">
+    촬영 전 확인:<br>
+    ① ChArUco 보드를 손톱 바로 아래(같은 평면)에 깔고 찍기<br>
+    ② 보드 전체가 사진 프레임 안에 들어오게<br>
+    ③ 손톱과 배경(보드/피부) 대비가 잘 보이게, 그림자 최소화
+  </p>
+  <form action="{{ url_for('start') }}" method="post">
+    <label>측정할 손</label>
+    <div class="radio-row">
+      <label><input type="radio" name="hand" value="right" checked> 오른손</label>
+      <label><input type="radio" name="hand" value="left"> 왼손</label>
+    </div>
+    <button type="submit">시작</button>
+  </form>
+{% endblock %}
