@@ -51,9 +51,11 @@ KMP_DUPLICATE_LIB_OK=TRUE ./.venv/bin/python seg_gui.py
 
 손톱의 정면 너비·측면 너비 실측값과 곡면 유형(P/B/S/C)을 입력하면
 네일 팁 제작에 필요한 곡면 길이를 계산한다.
+tkinter + matplotlib이 필요한데 `segmentation/.venv`에 이미 들어있으므로
+같은 가상환경으로 실행하면 된다.
 
 ```bash
-python3 curvature/curvature.py
+KMP_DUPLICATE_LIB_OK=TRUE segmentation/.venv/bin/python curvature/curvature.py
 ```
 
 ### 촬영 — `capture.py`
