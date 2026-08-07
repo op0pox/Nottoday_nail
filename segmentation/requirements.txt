@@ -1,0 +1,18 @@
+# segmentation GUI(seg_gui.py) 실행에 필요한 패키지.
+# Jetson Nano에는 설치하지 마세요 - ultralytics/PyTorch는 무겁습니다.
+# (Nano는 capture.py로 촬영만 하고, 사진을 노트북으로 옮겨서 처리)
+
+numpy>=1.19.0
+
+# ChArUco(cv2.aruco) 포함 OpenCV. 이미 opencv-python(비-contrib)이 깔려
+# 있다면 충돌 방지를 위해 먼저
+# `pip3 uninstall opencv-python opencv-python-headless`를 권장.
+opencv-contrib-python>=4.7.0
+
+# YOLOv8-seg 추론용 (손톱 자동 세그멘테이션 메인 백엔드). PyTorch가 함께 설치된다.
+# 없으면 seg_gui.py가 classical(피부색 기반, 정확도 낮음) 백엔드로 자동 폴백한다.
+ultralytics>=8.0.0
+
+# (선택) 있으면 손 랜드마크 기반 손가락 자동 라벨링을 시도할 수 있다.
+# 없어도 x좌표 순서 자동 매칭으로 동작하므로 필수는 아니다.
+# mediapipe>=0.10.0

@@ -8,3 +8,8 @@ __pycache__/
 *.pyo
 .venv/
 venv/
+
+# segmentation 산출물
+segmentation/models/*.pt
+segmentation/results/*
+!segmentation/results/.gitkeep
