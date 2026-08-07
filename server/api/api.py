@@ -7,7 +7,7 @@ from typing import List, Optional
 from segmentation.nail_segmentation import YoloNailBackend, measure_nail_from_mask, label_fingers_by_x_order
 
 # FastAPI 객체 대신 APIRouter를 생성합니다.
-router = APIRouter()
+router = APIRouter(prefix="/api")
 
 SQUARES_X = 18
 SQUARES_Y = 26
@@ -33,7 +33,7 @@ class MeasurementResult(BaseModel):
     width_mm: Optional[float] = None
 
 # @app.post 대신 @router.post를 사용합니다.
-@router.post("/api/measure", response_model=List[MeasurementResult])
+@router.post("/measure", response_model=List[MeasurementResult])
 async def measure_nails(
     file: UploadFile = File(...),
     hand: str = Form("right")
