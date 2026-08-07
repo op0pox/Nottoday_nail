@@ -38,8 +38,8 @@ python3 -m venv .venv
 
 ### 손톱 세그멘테이션 + 실측 — [`segmentation/`](segmentation/README.md)
 
-손가락을 **한 개씩** 촬영한 위에서(Top)/측면(Side) 사진을 한 장씩 넣으면
-손톱을 자동 세그멘테이션하고, 사진 속 ChArUco 체커보드를 인식해
+위에서(Top)/측면(Side) 사진을 한 장씩 넣으면 인식된 손톱을 전부
+자동 세그멘테이션하고, 사진 속 ChArUco 체커보드를 인식해
 길이/폭을 mm로 실측한다. 결과 이미지는 `results/`에 자동 저장.
 
 ```bash

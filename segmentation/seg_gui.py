@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-seg_gui.py — 손톱 세그멘테이션 GUI (손가락 1개씩 측정)
-========================================================
+seg_gui.py — 손톱 세그멘테이션 GUI
+====================================
 [역할]
-    손가락을 한 개씩 촬영한 위에서(Top) / 측면(Side) 사진을 한 장씩
-    불러오면, 이미지마다 손톱 1개를 자동 세그멘테이션해서 오른쪽에
-    미리보기로 보여주고, 실측값이 표기된 세그멘테이션 이미지를
-    results/ 폴더에 저장한다.
+    위에서(Top) / 측면(Side) 사진을 한 장씩 불러오면, 이미지에서
+    인식된 손톱을 전부 자동 세그멘테이션해서 오른쪽에 미리보기로
+    보여주고, 실측값이 표기된 세그멘테이션 이미지를 results/ 폴더에
+    저장한다. (손 전체 사진이면 손톱 5개가 전부, 손가락 1개 사진이면
+    1개가 표시된다. 여러 개일 때는 사진 왼쪽부터 1, 2, ... 번호를 붙인다)
 
     사진 안에 ChArUco 체커보드가 함께 찍혀 있으면 보드를 자동 인식해서
     픽셀 <-> mm 호모그래피를 계산하고, 손톱의 길이/폭을 mm 단위로
@@ -109,14 +110,12 @@ def try_charuco(image):
         return None, None
 
 
-def pick_best_mask(nail_masks):
-    """
-    손가락 1개짜리 사진이므로 검출 중 가장 확실한 마스크 하나만 고른다.
-    (confidence 우선, 같으면 면적이 큰 것)
-    """
-    if not nail_masks:
-        return None
-    return max(nail_masks, key=lambda nm: (nm.confidence, int(np.count_nonzero(nm.mask))))
+def sort_masks_by_x(nail_masks):
+    """검출된 마스크들을 사진 왼쪽부터 순서대로(중심 x좌표 기준) 정렬한다."""
+    def center_x(nm):
+        ys, xs = np.nonzero(nm.mask)
+        return float(xs.mean()) if len(xs) else 0.0
+    return sorted(nail_masks, key=center_x)
 
 
 def measure_pixels(mask):
@@ -156,10 +155,11 @@ def format_measure(m):
     return f"L {m['pixel_distance']:.0f}{w} px"
 
 
-def build_overlay(image, nail_mask, m):
+def build_overlay(image, nail_masks, measures):
     """
-    기존 measure_auto.py 디버그 이미지와 같은 스타일로 그린다:
-    초록 윤곽선 + 빨간 세로 길이선 + 파란 폭선 + 노란 mm 텍스트.
+    기존 measure_auto.py 디버그 이미지와 같은 스타일로, 검출된 손톱을
+    전부 그린다: 초록 윤곽선 + 빨간 세로 길이선 + 파란 폭선 + 노란 mm 텍스트.
+    손톱이 2개 이상이면 왼쪽부터 "1:", "2:" 번호를 붙인다.
     """
     overlay = image.copy()
     h, w = image.shape[:2]
@@ -167,17 +167,20 @@ def build_overlay(image, nail_mask, m):
     font_scale = 0.8 * scale
     thickness = max(2, int(round(2 * scale)))
 
-    if nail_mask is None:
+    if not nail_masks:
         cv2.putText(overlay, "no nail detected", (10, int(50 * scale)),
                     cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 255),
                     thickness, cv2.LINE_AA)
         return overlay
 
-    # 초록 윤곽선 (색 채우기 없음)
-    contours, _ = cv2.findContours(nail_mask.mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    cv2.drawContours(overlay, contours, -1, (0, 255, 0), thickness)
+    for i, (nail_mask, m) in enumerate(zip(nail_masks, measures)):
+        # 초록 윤곽선 (색 채우기 없음)
+        contours, _ = cv2.findContours(nail_mask.mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(overlay, contours, -1, (0, 255, 0), thickness)
 
-    if m is not None:
+        if m is None:
+            continue
+
         # 빨간 세로 길이선
         pa = tuple(int(round(v)) for v in m["point_a"])
         pb = tuple(int(round(v)) for v in m["point_b"])
@@ -188,7 +191,7 @@ def build_overlay(image, nail_mask, m):
             wb = tuple(int(round(v)) for v in m["width_point_b"])
             cv2.line(overlay, wa, wb, (255, 0, 0), thickness)
 
-        # 노란 텍스트 — 손톱 위쪽에 표기 (예: "10.4mm w5.0mm")
+        # 노란 텍스트 — 손톱 위쪽에 표기 (예: "1:10.4mm w5.0mm")
         if m["length_mm"] is not None:
             text = f"{m['length_mm']:.1f}mm"
             if m["width_mm"]:
@@ -197,6 +200,8 @@ def build_overlay(image, nail_mask, m):
             text = f"{m['pixel_distance']:.0f}px"
             if m["width_pixel_distance"]:
                 text += f" w{m['width_pixel_distance']:.0f}px"
+        if len(nail_masks) > 1:
+            text = f"{i + 1}:{text}"
 
         ys, xs = np.nonzero(nail_mask.mask)
         tx = max(0, int(xs.mean()) - int(60 * scale))
@@ -208,29 +213,31 @@ def build_overlay(image, nail_mask, m):
 
 def process_image(image, backend, use_charuco):
     """
-    이미지 한 장 처리(손톱 1개): 세그멘테이션 → (선택) 체커보드 실측 → 오버레이.
-    반환: dict(overlay, measure, rms_mm, homography_found, detected)
+    이미지 한 장 처리: 세그멘테이션(검출된 손톱 전부) → (선택) 체커보드 실측
+    → 오버레이. 손 전체 사진이면 손톱 5개가 전부 표시된다.
+    반환: dict(overlay, measures, rms_mm, homography_found, detected, count)
     """
-    best = pick_best_mask(backend.segment(image))
+    nail_masks = sort_masks_by_x(backend.segment(image))
 
     homography, rms_mm = (None, None)
-    if use_charuco and best is not None:
+    if use_charuco and nail_masks:
         homography, rms_mm = try_charuco(image)
 
-    m = None
-    if best is not None:
+    measures = []
+    for nm in nail_masks:
         if homography is not None:
             # finger를 지정하면 기존 measure_auto.py와 동일한 세로(수직) 측정 방식을 쓴다
-            m = measure_nail_from_mask(best.mask, homography, finger="nail")
+            measures.append(measure_nail_from_mask(nm.mask, homography, finger="nail"))
         else:
-            m = measure_pixels(best.mask)
+            measures.append(measure_pixels(nm.mask))
 
     return {
-        "overlay": build_overlay(image, best, m),
-        "measure": m,
+        "overlay": build_overlay(image, nail_masks, measures),
+        "measures": measures,
         "rms_mm": rms_mm,
         "homography_found": homography is not None,
-        "detected": best is not None,
+        "detected": bool(nail_masks),
+        "count": len(nail_masks),
     }
 
 
@@ -286,7 +293,7 @@ class ImagePicker(tk.Frame):
 class App:
     def __init__(self, root: tk.Tk):
         self.root = root
-        root.title("손톱 세그멘테이션 — 손가락 1개씩 (Top / Side)")
+        root.title("손톱 세그멘테이션 — Top / Side")
         root.configure(bg=BG)
         self.backend = None
         self.backend_conf = None
@@ -302,7 +309,7 @@ class App:
 
         tk.Label(left, text="손톱 세그멘테이션", font=(FONT, 18, 'bold'),
                  bg=BG, fg=TEXT, anchor='w').pack(fill=tk.X)
-        tk.Label(left, text="손가락 1개씩 · Top/Side 각 1장 → 자동 실측",
+        tk.Label(left, text="Top/Side 각 1장 → 인식된 손톱 전부 자동 실측",
                  font=(FONT, 11), bg=BG, fg=MUTED, anchor='w'
                  ).pack(fill=tk.X, pady=(2, 14))
 
@@ -429,14 +436,21 @@ class App:
                 cv2.imwrite(out_path, res["overlay"])
                 saved.append(out_path)
 
-                m = res["measure"]
+                nails = []
+                for idx, m in enumerate(res["measures"]):
+                    if m is None:
+                        continue
+                    nails.append({
+                        "index": idx + 1,
+                        "length_mm": round(m["length_mm"], 2) if m["length_mm"] else None,
+                        "width_mm": round(m["width_mm"], 2) if m["width_mm"] else None,
+                        "length_px": round(m["pixel_distance"], 1),
+                    })
                 measurements_json[kind] = {
                     "image_path": path,
-                    "detected": res["detected"],
-                    "length_mm": round(m["length_mm"], 2) if m and m["length_mm"] else None,
-                    "width_mm": round(m["width_mm"], 2) if m and m["width_mm"] else None,
-                    "length_px": round(m["pixel_distance"], 1) if m else None,
+                    "detected_count": res["count"],
                     "board_rms_mm": round(res["rms_mm"], 4) if res["rms_mm"] else None,
+                    "nails": nails,
                 }
 
             if measurements_json:
@@ -461,10 +475,10 @@ class App:
             if not res["detected"]:
                 sub.config(text="검출 실패", fg=RED)
             elif res["homography_found"]:
-                sub.config(text=f"{format_measure(res['measure'])} · 보드 RMS {res['rms_mm']:.2f}mm",
+                sub.config(text=f"손톱 {res['count']}개 · 보드 RMS {res['rms_mm']:.2f}mm",
                            fg=TEXT)
             else:
-                sub.config(text=format_measure(res["measure"]) + " · 보드 미검출", fg=MUTED)
+                sub.config(text=f"손톱 {res['count']}개 · 보드 미검출", fg=MUTED)
 
         self.result_lbl.config(text=self._format_measurements(results))
         rel = os.path.relpath(session_dir, os.path.dirname(RESULTS_DIR))
@@ -479,7 +493,10 @@ class App:
             if res is None:
                 continue
             lines.append(title)
-            lines.append(f" {format_measure(res['measure']) if res['detected'] else '검출 실패'}")
+            if not res["detected"]:
+                lines.append(" 검출 실패")
+            for idx, m in enumerate(res["measures"]):
+                lines.append(f" {idx + 1}: {format_measure(m)}")
             lines.append("")
         return "\n".join(lines).strip() or "—"
 
