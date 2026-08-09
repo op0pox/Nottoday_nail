@@ -107,6 +107,13 @@ def check_gui_available():
 
 # ---------------------------------------------------------------------------
 # ChArUco 호모그래피 기반 mm 변환
+#
+# [호모그래피란?]
+#   "이미지 픽셀 좌표 -> 보드 평면 mm 좌표"를 한 번에 해주는 3x3 변환 행렬.
+#   charuco_calibration.py가 사진 속 보드의 코너들(픽셀 위치와 실제 mm 위치를
+#   둘 다 아는 점들)로부터 이 행렬을 계산해준다.
+#   행렬 하나로 원근/기울어짐까지 보정되기 때문에, 단순한 "1픽셀=몇mm"
+#   비율(px_per_mm) 방식보다 정확하다.
 # ---------------------------------------------------------------------------
 def transform_points_to_mm(homography, points):
     """
@@ -119,9 +126,11 @@ def transform_points_to_mm(homography, points):
     반환값: (N, 2) 크기의 mm 좌표 numpy 배열
     """
     H = np.asarray(homography, dtype=np.float64)
+    # perspectiveTransform은 (N, 1, 2) 모양의 float32 배열을 요구한다
+    # reshape(-1, 1, 2)의 -1은 "나머지 크기에 맞춰 알아서 계산"이라는 뜻
     pts = np.array(points, dtype=np.float32).reshape(-1, 1, 2)
-    transformed = cv2.perspectiveTransform(pts, H)
-    return transformed.reshape(-1, 2)
+    transformed = cv2.perspectiveTransform(pts, H)   # 실제 변환 수행
+    return transformed.reshape(-1, 2)                # (N, 2)로 다시 펴서 반환
 
 
 def parallax_factor(camera_height_mm, nail_height_mm):
@@ -129,10 +138,16 @@ def parallax_factor(camera_height_mm, nail_height_mm):
     손톱이 모눈판(보드) 평면보다 손가락 두께만큼 카메라 쪽으로 떠 있을 때
     생기는 시차(원근) 오차를 보정하는 배율을 계산한다.
 
+    [원리] 카메라에 가까운 물체일수록 사진에서 더 크게 찍힌다.
+    호모그래피는 "보드 평면 위"를 기준으로 계산됐는데, 손톱은 보드보다
+    손가락 두께만큼 카메라에 가까우므로 실제보다 약간 크게 측정된다.
+    닮은꼴 삼각형 비율 (카메라높이 - 손톱높이) / 카메라높이 를 곱해서
+    이 과대측정을 줄여준다.
+
     camera_height_mm: 카메라 렌즈 ~ 보드 평면까지의 높이 (mm)
     nail_height_mm: 보드 평면 ~ 손톱까지의 높이 (mm, 기본 0이면 보정 없음)
     """
-    if not camera_height_mm:
+    if not camera_height_mm:     # 0이나 None이면 보정하지 않음 (배율 1.0)
         return 1.0
     return (camera_height_mm - nail_height_mm) / camera_height_mm
 
@@ -141,6 +156,9 @@ def measure_length_mm(homography, point_a, point_b, camera_height_mm=295.0, nail
     """
     이미지 픽셀 좌표 두 점(point_a, point_b) 사이의 실제 거리를
     호모그래피로 mm 평면에 옮긴 뒤, 시차 보정까지 적용해서 mm 단위로 계산한다.
+
+    처리 순서: 픽셀 두 점 -> (호모그래피) -> mm 두 점 -> 거리 계산 -> 시차 보정
+    np.linalg.norm(A - B) = 두 점 사이의 유클리드 거리 (피타고라스 정리)
     """
     mm_pts = transform_points_to_mm(homography, [point_a, point_b])
     raw_length_mm = float(np.linalg.norm(mm_pts[0] - mm_pts[1]))

@@ -2,14 +2,22 @@
 backends/measure_from_mask.py
 ==============================
 [역할]
-    세그멘테이션 백엔드가 만든 바이너리 마스크(손톱 하나) 하나하나에서
-    "뿌리 <-> 끝" 두 후보점을 PCA(주성분분석)로 찾고, ChArUco 호모그래피로
-    mm 길이를 계산한다. 또한 검출된 여러 마스크에 엄지~소지 라벨을
-    자동으로 붙이는 기능도 제공한다.
+    세그멘테이션 백엔드가 만든 바이너리 마스크(손톱 하나)에서
+    "뿌리 <-> 끝" 길이와 "중간 높이의 가로 폭"의 끝점들을 찾고,
+    ChArUco 호모그래피로 mm 길이를 계산한다.
+    또한 검출된 여러 마스크에 엄지~소지 라벨을 자동으로 붙이는
+    기능(label_fingers)도 제공한다.
 
     이 파일은 직접 실행하지 않는다. seg_gui.py에서
-        from backends.measure_from_mask import measure_nail_from_mask, label_fingers
+        from backends.measure_from_mask import measure_nail_from_mask, ...
     형태로 불러와서 사용한다.
+
+[측정 방식 2가지 — measure_nail_from_mask()의 finger 인자로 선택]
+    finger 지정   : 세로(수직) 고정 측정. 손가락이 사진에서 세로로
+                    놓인다는 가정. 마스크 일부가 떨어져 나가도 안정적.
+                    (현재 seg_gui.py가 쓰는 방식)
+    finger=None   : PCA 장축 측정. 손톱이 어느 방향으로 기울어져 있어도
+                    "가장 긴 방향"을 자동으로 찾아서 잰다.
 """
 
 import cv2
@@ -20,27 +28,36 @@ from utils import measure_length_mm
 
 def find_long_axis_endpoints(mask):
     """
-    바이너리 마스크(HxW, 0/255)에서 가장 큰 컨투어를 찾고, PCA로 장축
-    방향을 구한 뒤 그 방향으로 가장 멀리 떨어진 윤곽선 위의 두 점을 반환한다.
-    (손톱은 대체로 길쭉한 타원형이므로, 장축의 양 끝이 뿌리/끝에 해당한다)
+    (PCA 방식) 마스크에서 장축 방향으로 가장 멀리 떨어진 두 점을 찾는다.
+
+    PCA(주성분분석)란? 점들이 흩어진 모양에서 "가장 길게 퍼진 방향"을
+    찾는 통계 기법. 손톱은 길쭉한 타원형이므로 이 방향의 양 끝이
+    뿌리/끝에 해당한다.
+
+    단계:
+      1. 마스크의 윤곽선 좌표들을 모은다
+      2. 좌표들의 공분산 행렬 -> 고유벡터 = 퍼진 방향들
+      3. 가장 큰 고유값의 방향(장축)에 좌표들을 투영(내적)
+      4. 투영값이 최소/최대인 두 점이 장축의 양 끝
 
     반환값: (point_a, point_b) 각각 (x, y) numpy 배열, 마스크가 비었으면 None
     """
+    # CHAIN_APPROX_NONE = 윤곽선의 모든 점을 압축 없이 다 가져옴 (정밀한 끝점용)
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
     if not contours:
         return None
-    contour = max(contours, key=cv2.contourArea)
-    pts = contour.reshape(-1, 2).astype(np.float64)
+    contour = max(contours, key=cv2.contourArea)      # 가장 큰 덩어리만 사용
+    pts = contour.reshape(-1, 2).astype(np.float64)   # (N, 1, 2) -> (N, 2)로 펴기
     if len(pts) < 2:
         return None
 
-    mean = pts.mean(axis=0)
-    centered = pts - mean
-    cov = np.cov(centered.T)
-    eigvals, eigvecs = np.linalg.eigh(cov)
-    major_axis = eigvecs[:, int(np.argmax(eigvals))]
+    mean = pts.mean(axis=0)          # 좌표들의 중심점
+    centered = pts - mean            # 중심을 원점으로 이동 (PCA 전처리)
+    cov = np.cov(centered.T)         # 공분산 행렬 (2x2)
+    eigvals, eigvecs = np.linalg.eigh(cov)            # 고유값/고유벡터 분해
+    major_axis = eigvecs[:, int(np.argmax(eigvals))]  # 최대 고유값의 방향 = 장축
 
-    projections = centered @ major_axis
+    projections = centered @ major_axis   # @ = 행렬곱. 각 점을 장축에 투영한 값
     idx_min = int(np.argmin(projections))
     idx_max = int(np.argmax(projections))
     return pts[idx_min], pts[idx_max]
@@ -48,25 +65,27 @@ def find_long_axis_endpoints(mask):
 
 def find_vertical_axis_endpoints(mask):
     """
-    바이너리 마스크(HxW, 0/255)에서 마스크의 세로(y) 범위를 그대로 뿌리/끝으로 쓴다.
-    x좌표는 마스크 중심의 x로 고정해서, 결과적으로 완전히 수직인 직선 길이를 잰다.
-    (엄지를 제외한 4개 손가락은 사진에서 항상 세로로 곧게 나오므로, PCA 장축보다
-    이 방식이 마스크 일부 결손에 더 안정적이다)
+    (세로 고정 방식) 마스크의 세로(y) 범위를 그대로 뿌리/끝으로 쓴다.
+    x좌표는 마스크 중심의 x로 고정해서, 완전히 수직인 직선 길이를 잰다.
+
+    손가락이 사진에서 세로로 곧게 놓이는 촬영 환경에서는 PCA 장축보다
+    이 방식이 마스크 일부 결손에 더 안정적이다.
 
     반환값: (point_a, point_b) 각각 (x, y) numpy 배열, 마스크가 비었으면 None
     """
+    # np.nonzero = 마스크에서 0이 아닌(=손톱) 픽셀들의 (행=y, 열=x) 좌표
     ys, xs = np.nonzero(mask)
     if len(xs) == 0:
         return None
-    cx = float(xs.mean())
-    y_min = float(ys.min())
-    y_max = float(ys.max())
+    cx = float(xs.mean())        # 가로 중심
+    y_min = float(ys.min())      # 가장 위 = 뿌리 (or 끝)
+    y_max = float(ys.max())      # 가장 아래
     return np.array([cx, y_min]), np.array([cx, y_max])
 
 
 def find_horizontal_width_endpoints(mask, y_mid):
     """
-    마스크에서 y_mid 행(정수로 반올림)의 좌우 끝점을 찾아 가로 폭의 두 점을
+    마스크에서 y_mid 행(가로줄)의 좌우 끝점을 찾아 가로 폭의 두 점을
     반환한다. (뿌리/끝 세로선의 중간 높이에서 가로로 선을 그어 폭을 잰다)
     y_mid 행에 마스크 픽셀이 하나도 없으면 가장 가까운 행으로 대체한다.
 
@@ -77,36 +96,44 @@ def find_horizontal_width_endpoints(mask, y_mid):
         return None
 
     y_mid_int = int(round(y_mid))
-    row_ys = np.unique(ys)
+    row_ys = np.unique(ys)               # 마스크 픽셀이 존재하는 행들의 목록
     if y_mid_int not in row_ys:
+        # y_mid에 픽셀이 없으면 |차이|가 가장 작은 행으로 대체
         y_mid_int = int(row_ys[np.argmin(np.abs(row_ys - y_mid_int))])
 
-    row_xs = xs[ys == y_mid_int]
-    x_left = float(row_xs.min())
-    x_right = float(row_xs.max())
+    row_xs = xs[ys == y_mid_int]         # 해당 행에 있는 픽셀들의 x좌표만 추출
+    x_left = float(row_xs.min())         # 그 행의 왼쪽 끝
+    x_right = float(row_xs.max())        # 그 행의 오른쪽 끝
     return np.array([x_left, float(y_mid_int)]), np.array([x_right, float(y_mid_int)])
 
 
 def measure_nail_from_mask(mask, homography, camera_height_mm=295.0, nail_height_mm=0.0, finger=None):
     """
-    마스크 하나에 대해 뿌리/끝(세로 길이)과 폭(가로, 세로선 중간 높이 기준) 후보점과
-    mm 길이를 계산한다.
-    finger가 주어지면(5개 손가락 전부) 항상 수직(세로) 직선 길이를 잰다.
-    finger가 None(하위호환, 손가락 라벨 없이 호출된 경우)이면 PCA 장축 방식을 쓴다
-    (이 경우 가로 폭은 세로선의 중간 y를 기준으로 동일하게 계산한다).
+    마스크 하나에 대해 뿌리/끝(세로 길이)과 폭(가로, 세로선 중간 높이 기준)의
+    끝점 좌표와 mm 길이를 계산한다. (이 파일의 핵심 함수)
+
+    매개변수:
+      mask             : 손톱 바이너리 마스크 (0/255)
+      homography       : 픽셀->mm 변환 행렬 (charuco_calibration.py 결과)
+      camera_height_mm : 카메라~보드 평면 높이 (시차 보정용)
+      nail_height_mm   : 보드~손톱 높이 (0이면 시차 보정 없음)
+      finger           : 지정하면 세로 고정 측정, None이면 PCA 장축 측정
+
     반환: {"point_a", "point_b", "pixel_distance", "length_mm",
            "width_point_a", "width_point_b", "width_pixel_distance", "width_mm"}
     또는 None(마스크가 비었을 때)
     """
+    # ── 1) 길이 끝점 찾기 (방식 선택) ──
     if finger is None:
-        endpoints = find_long_axis_endpoints(mask)
+        endpoints = find_long_axis_endpoints(mask)      # PCA 장축
     else:
-        endpoints = find_vertical_axis_endpoints(mask)
+        endpoints = find_vertical_axis_endpoints(mask)  # 세로 고정
     if endpoints is None:
         return None
     p1, p2 = endpoints
 
-    pixel_distance = float(np.linalg.norm(p2 - p1))
+    # ── 2) 길이 계산: 픽셀 거리 + mm 거리 ──
+    pixel_distance = float(np.linalg.norm(p2 - p1))     # 유클리드 거리(피타고라스)
     length_mm = measure_length_mm(
         homography,
         (float(p1[0]), float(p1[1])),
@@ -115,6 +142,7 @@ def measure_nail_from_mask(mask, homography, camera_height_mm=295.0, nail_height
         nail_height_mm=nail_height_mm,
     )
 
+    # ── 3) 폭 계산: 길이선의 중간 높이에서 가로로 ──
     y_mid = (float(p1[1]) + float(p2[1])) / 2.0
     width_endpoints = find_horizontal_width_endpoints(mask, y_mid)
     if width_endpoints is not None:
@@ -135,6 +163,7 @@ def measure_nail_from_mask(mask, homography, camera_height_mm=295.0, nail_height
         width_point_a = None
         width_point_b = None
 
+    # 결과를 딕셔너리로 묶어서 반환 (호출한 쪽에서 키 이름으로 꺼내 씀)
     return {
         "point_a": (float(p1[0]), float(p1[1])),
         "point_b": (float(p2[0]), float(p2[1])),
@@ -149,8 +178,10 @@ def measure_nail_from_mask(mask, homography, camera_height_mm=295.0, nail_height
 
 # ---------------------------------------------------------------------------
 # 손가락 라벨링 (마스크 여러 개 -> 엄지~소지 배정)
+# 현재 seg_gui.py는 번호(1~N)만 쓰지만, 손가락 이름이 필요할 때를 위해 유지.
 # ---------------------------------------------------------------------------
 def _mask_centroids(nail_masks):
+    """각 마스크의 중심점 (x, y) 리스트를 만든다. 빈 마스크가 있으면 None."""
     centroids = []
     for nm in nail_masks:
         ys, xs = np.nonzero(nm.mask)
@@ -171,6 +202,7 @@ def label_fingers_by_x_order(nail_masks, hand="right"):
     if centroids is None:
         return None
 
+    # x좌표 오름차순으로 마스크 인덱스를 정렬 (왼쪽부터)
     order = sorted(range(len(centroids)), key=lambda i: centroids[i][0])
     # 카메라를 향해 손등을 편 상태로 수직 촬영했다고 가정.
     # 오른손: 사진 왼쪽부터 엄지->소지 순, 왼손: 사진 왼쪽부터 소지->엄지 순
@@ -180,6 +212,7 @@ def label_fingers_by_x_order(nail_masks, hand="right"):
     else:
         finger_order = ["pinky", "ring", "middle", "index", "thumb"]
 
+    # 정렬 순서(rank)에 따라 각 마스크에 손가락 이름 배정
     labels = [None] * len(centroids)
     for rank, idx in enumerate(order):
         labels[idx] = finger_order[rank]
@@ -191,10 +224,13 @@ def label_fingers_with_mediapipe(nail_masks, debug_image):
     (선택 기능) mediapipe가 설치돼 있으면 손 랜드마크의 손가락 끝 좌표와
     각 마스크 중심점을 최근접 매칭해서 라벨을 붙인다.
     mediapipe가 없거나 손을 못 찾으면 None을 반환해서 다른 방법으로 폴백하게 한다.
+
+    mediapipe란? 구글이 만든 손/얼굴/자세 인식 라이브러리.
+    손 사진에서 관절 21개의 좌표(랜드마크)를 찾아준다.
     """
     try:
         import mediapipe as mp
-    except ImportError:
+    except ImportError:      # 설치 안 돼 있으면 조용히 포기 (선택 기능이므로)
         return None
     if debug_image is None:
         return None
@@ -205,16 +241,20 @@ def label_fingers_with_mediapipe(nail_masks, debug_image):
 
     mp_hands = mp.solutions.hands
     h, w = debug_image.shape[:2]
+    # with 문 = 사용 후 자동으로 리소스 정리
     with mp_hands.Hands(static_image_mode=True, max_num_hands=1, min_detection_confidence=0.3) as hands:
-        rgb = cv2.cvtColor(debug_image, cv2.COLOR_BGR2RGB)
+        rgb = cv2.cvtColor(debug_image, cv2.COLOR_BGR2RGB)   # mediapipe는 RGB를 원함
         result = hands.process(rgb)
         if not result.multi_hand_landmarks:
             return None
 
         lm = result.multi_hand_landmarks[0].landmark
+        # mediapipe 랜드마크 번호: 4=엄지끝, 8=검지끝, 12=중지끝, 16=약지끝, 20=소지끝
         tip_ids = {"thumb": 4, "index": 8, "middle": 12, "ring": 16, "pinky": 20}
+        # 랜드마크 좌표는 0~1 비율이므로 픽셀 좌표로 변환 (x * 폭, y * 높이)
         finger_points = {name: (lm[idx].x * w, lm[idx].y * h) for name, idx in tip_ids.items()}
 
+        # 모든 (손가락끝, 마스크중심) 쌍의 거리를 계산해서 가까운 순으로 정렬
         pairs = []
         for finger, (fx, fy) in finger_points.items():
             for mi, (cx, cy) in enumerate(centroids):
@@ -222,6 +262,7 @@ def label_fingers_with_mediapipe(nail_masks, debug_image):
                 pairs.append((dist, finger, mi))
         pairs.sort(key=lambda p: p[0])
 
+        # 가까운 쌍부터 확정해 나간다 (이미 배정된 손가락/마스크는 건너뜀)
         labels = [None] * len(centroids)
         used_fingers, used_masks = set(), set()
         for dist, finger, mi in pairs:
@@ -231,7 +272,7 @@ def label_fingers_with_mediapipe(nail_masks, debug_image):
             used_fingers.add(finger)
             used_masks.add(mi)
 
-        if None in labels:
+        if None in labels:       # 하나라도 매칭 못 하면 실패 처리
             return None
         return labels
 
@@ -257,6 +298,7 @@ def label_fingers(nail_masks, hand="right", use_mediapipe=False, debug_image=Non
         print("[WARN] 손가락 자동 라벨링 실패 (검출 개수가 5개가 아니거나 중복). 라벨 없이 진행합니다.")
         return nail_masks
 
+    # zip으로 마스크와 라벨을 짝지어 하나씩 채워 넣는다
     for nm, label in zip(nail_masks, labels):
         nm.finger = label
     return nail_masks

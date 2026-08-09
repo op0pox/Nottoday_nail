@@ -71,18 +71,28 @@ CATEGORY_ORDER = ["P", "B", "S", "C"]
 
 # ── 계산 ──────────────────────────────────────────────────────────────────────
 def calc(category: str, front_width: float, side_width: float) -> dict:
-    """유형(P/B/S/C)과 정면너비·측면너비로 곡면 길이를 계산한다."""
-    p = TYPES[category]
-    a = p["k_a"] * front_width
-    b = side_width
-    c = math.hypot(a, b)
-    h = p["k_h"] * c
-    r = c ** 2 / (8 * h) + h / 2
+    """
+    유형(P/B/S/C)과 정면너비·측면너비로 곡면 길이를 계산한다. (핵심 함수)
+
+    수학적 배경 — "현(c)과 새그(h)를 알면 원이 결정된다":
+      원 위의 두 점을 잇는 직선을 현(chord), 현의 중점에서 원호까지의
+      높이를 새그(sag)라고 한다. 이 둘만 알면 원의 반지름이
+        r = c²/(8h) + h/2
+      로 유일하게 정해진다 (피타고라스 정리에서 유도되는 공식).
+      반지름을 알면 중심각 θ와 원호 길이 L = r·θ 도 따라 나온다.
+    """
+    p = TYPES[category]                 # 선택한 유형의 비율(k) 세트
+    a = p["k_a"] * front_width          # 측정 삼각형의 밑변 (정면너비의 일정 비율)
+    b = side_width                      # 측정 삼각형의 높이 = 측면너비 그대로
+    c = math.hypot(a, b)                # 빗변 = √(a²+b²) — 원호 계산용 현이 된다
+    h = p["k_h"] * c                    # 새그: 현 길이의 일정 비율로 가정
+    r = c ** 2 / (8 * h) + h / 2        # 현+새그 -> 곡률 반지름 (위 공식)
+    # 중심각: 보통 θ = 2·asin(c/2r)로 쓰지만,
     # atan2를 쓰면 h가 c/2를 넘는 깊은 곡면에서도 θ가 올바르게 180°를 넘어간다.
     theta = 2 * math.atan2(c / 2, r - h)
-    L = r * theta
-    flat = p["k_f"] * a
-    total = 2 * L + flat
+    L = r * theta                       # 편측 원호 길이 (호의 길이 공식)
+    flat = p["k_f"] * a                 # 가운데 평탄부 길이
+    total = 2 * L + flat                # 최종 곡면 길이 = 양쪽 원호 + 평탄부
     return dict(
         category=category, name=p["name"],
         front_width=front_width, side_width=side_width,
@@ -93,31 +103,46 @@ def calc(category: str, front_width: float, side_width: float) -> dict:
 
 
 def arc_profile(c: float, h: float, n: int = 150):
-    """현(c)·새그(h)로 정의되는 단일 원호의 (x, z) 좌표. (0,0)→(c/2,h)→(c,0)"""
-    R = c ** 2 / (8 * h) + h / 2
-    Cx, Cz = c / 2, h - R
+    """
+    현(c)·새그(h)로 정의되는 단일 원호의 (x, z) 좌표들을 만든다.
+    그래프(②번 패널)에 원호를 그리기 위한 점 목록 생성용.
+    원호는 (0,0) → (c/2,h) → (c,0)을 지난다.
+    """
+    R = c ** 2 / (8 * h) + h / 2      # calc()와 같은 반지름 공식
+    Cx, Cz = c / 2, h - R             # 원의 중심 (현의 중점 아래 R-h 만큼)
 
+    # 원호의 시작/끝 각도: 중심에서 (0,0)과 (c,0)을 바라보는 각도
     a_start = math.atan2(0 - Cz, 0 - Cx)
     a_end = math.atan2(0 - Cz, c - Cx)
-    if a_start < a_end:
+    if a_start < a_end:               # 호가 위쪽으로 그려지도록 방향 보정
         a_start += 2 * math.pi
 
+    # linspace = 시작~끝을 n등분한 각도들 -> 원의 매개변수 방정식으로 좌표 생성
     t = np.linspace(a_start, a_end, n)
-    x = Cx + R * np.cos(t)
-    z = Cz + R * np.sin(t)
+    x = Cx + R * np.cos(t)            # x = 중심x + R·cos(각도)
+    z = Cz + R * np.sin(t)            # z = 중심z + R·sin(각도)
     return x, z, R, Cx, Cz
 
 
 def _bezier(p0, p1, p2, n=60):
-    t = np.linspace(0, 1, n)[:, None]
+    """
+    2차 베지어 곡선: 시작점 p0, 제어점 p1, 끝점 p2를 지나는 부드러운 곡선.
+    ③번 전개도에서 양쪽의 곡면 모양을 자연스럽게 그리는 데 쓴다.
+    공식: B(t) = (1-t)²·p0 + 2(1-t)t·p1 + t²·p2   (t: 0→1)
+    """
+    t = np.linspace(0, 1, n)[:, None]   # [:, None] = 열벡터로 변환 (브로드캐스트용)
     p0, p1, p2 = np.array(p0), np.array(p1), np.array(p2)
     pts = (1 - t) ** 2 * p0 + 2 * (1 - t) * t * p1 + t ** 2 * p2
-    return pts[:, 0], pts[:, 1]
+    return pts[:, 0], pts[:, 1]         # x좌표들, y좌표들로 나눠 반환
 
 
 # ── 커스텀 위젯 ───────────────────────────────────────────────────────────────
 class FlatButton(tk.Label):
-    """macOS에서도 색이 먹는 플랫 버튼 (hover 효과 포함)"""
+    """
+    macOS에서도 색이 먹는 플랫 버튼 (hover 효과 포함).
+    macOS의 tk.Button은 시스템 스타일이 강제되어 bg 색이 무시되므로,
+    Label에 클릭 이벤트(bind)를 직접 연결해 버튼처럼 동작하게 만들었다.
+    """
 
     def __init__(self, master, text, command, bg, fg, hover_bg,
                  font=(FONT, 11, 'bold'), padx=12, pady=6, **kw):
@@ -131,12 +156,16 @@ class FlatButton(tk.Label):
 
 
 class NumberField(tk.Frame):
-    """[-] 입력창 [+] 스테퍼가 붙은 숫자 입력 필드"""
+    """
+    [-] 입력창 [+] 스테퍼가 붙은 숫자 입력 필드.
+    값이 바뀔 때마다 on_change 콜백을 호출해서 실시간 재계산을 일으킨다.
+    (위/아래 방향키로도 값을 올리고 내릴 수 있다)
+    """
 
     def __init__(self, master, label, default, step, on_change):
         super().__init__(master, bg=BG)
-        self.step = step
-        self.on_change = on_change
+        self.step = step              # +/- 버튼 한 번에 움직일 크기 (0.5mm)
+        self.on_change = on_change    # 값 변경 시 호출할 함수 (App._schedule)
 
         head = tk.Frame(self, bg=BG)
         head.pack(fill=tk.X)
@@ -171,23 +200,29 @@ class NumberField(tk.Frame):
         self._box = box
 
     def _bump(self, sign):
+        """+/- 버튼 또는 방향키: 현재 값을 step만큼 증가/감소 (sign=±1)"""
         try:
             v = float(self.var.get())
-        except ValueError:
+        except ValueError:            # 숫자가 아닌 입력 상태면 무시
             return
+        # step 밑으로는 내려가지 않게 max()로 하한 설정
         v = max(round(v + sign * self.step, 2), self.step)
-        self.var.set(f'{v:g}')
+        self.var.set(f'{v:g}')        # :g = 불필요한 소수점 0 제거 (6.0 -> 6)
         self.on_change()
 
     def get(self) -> float:
         return float(self.var.get())
 
     def mark(self, ok: bool):
+        """입력값이 잘못됐을 때 테두리를 빨갛게 표시 (ok=True면 원래대로)"""
         self._box.config(highlightbackground=BORDER2 if ok else RED)
 
 
 class CategorySelector(tk.Frame):
-    """P / B / S / C 유형을 고르는 세그먼트 버튼"""
+    """
+    P / B / S / C 유형을 고르는 세그먼트 버튼 (한 줄에 4개, 하나만 선택됨).
+    선택된 버튼만 파란 배경으로 강조하고, 바뀔 때 on_change를 호출한다.
+    """
 
     def __init__(self, master, default, on_change):
         super().__init__(master, bg=BG)
@@ -231,13 +266,20 @@ class CategorySelector(tk.Frame):
 
 # ── GUI ───────────────────────────────────────────────────────────────────────
 class App:
+    """
+    메인 화면. 구조:
+      왼쪽 패널  = 유형 선택 + 입력 필드 + 계산 결과 카드들
+      오른쪽 패널 = matplotlib 그래프 3개 (삼각형/원호/전개도)
+    입력이 바뀔 때마다 _schedule() -> _update() -> _draw() 순으로 갱신된다.
+    """
+
     def __init__(self, root: tk.Tk):
         self.root = root
         root.title("네일 팁 곡면 계산기 — P/B/S/C")
         root.configure(bg=BG)
-        self._after_id = None
+        self._after_id = None    # 디바운스 타이머 ID (아래 _schedule 참고)
         self._build_ui()
-        self._update()
+        self._update()           # 시작하자마자 기본값으로 한 번 계산해서 표시
 
     # ── 왼쪽 패널 ────────────────────────────────────────────────────────────
     def _build_ui(self):
@@ -353,7 +395,14 @@ class App:
 
     # ── 동작 ─────────────────────────────────────────────────────────────────
     def _schedule(self):
-        """입력 후 250ms 디바운스로 실시간 재계산"""
+        """
+        입력 후 250ms 디바운스로 실시간 재계산.
+
+        디바운스란? 키를 누를 때마다 즉시 재계산하면 "1" -> "12" -> "12.5"
+        입력 중간마다 그래프가 깜빡인다. 대신 "입력이 250ms 동안 멈추면
+        그때 한 번만 계산"하도록 예약(after)하고, 새 입력이 오면 이전
+        예약을 취소(after_cancel)하는 기법이다.
+        """
         if self._after_id:
             self.root.after_cancel(self._after_id)
         self._after_id = self.root.after(250, self._update)
@@ -366,6 +415,7 @@ class App:
             self.status.config(text=f"✓ 복사됨: {txt} mm", fg=GREEN)
 
     def _update(self):
+        """입력값 검증 -> calc() 호출 -> 결과 카드/그래프 갱신 (화면 갱신의 중심)"""
         self._after_id = None
         cat = self.category.get()
         try:
@@ -412,6 +462,13 @@ class App:
 
     # ── 그래프 ───────────────────────────────────────────────────────────────
     def _draw(self, r: dict):
+        """
+        계산 결과 r(딕셔너리)로 그래프 3개를 다시 그린다:
+          ① 측정 삼각형 (a, b, c 관계)
+          ② 원호 계산 (현 c와 새그 h로 만든 원호, r·θ·L)
+          ③ 최종 전개도 (2L + 평탄부를 실제 비율로 펼친 모양)
+        matplotlib의 Figure를 매번 지우고(clear) 새로 그리는 방식.
+        """
         self.fig.clear()
         gs = gridspec.GridSpec(1, 3, figure=self.fig,
                                left=0.045, right=0.98,
