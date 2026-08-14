@@ -8,6 +8,7 @@
 Nottoday_nail/
 ├── capture.py        # Jetson CSI 카메라 정지 이미지 캡처 CLI
 ├── curvature/        # 곡면 길이 계산기 GUI (P/B/S/C 유형)
+├── nano_capture/     # Jetson Nano 고정 카메라 2대 촬영 장치 (X11 미리보기 + 버튼 촬영)
 └── segmentation/     # 손톱 세그멘테이션 + 체커보드 실측 GUI
     ├── seg_gui.py            # 메인 GUI
     ├── check_setup.py        # 설치 상태 점검 + YOLO 모델 다운로드
@@ -64,6 +65,19 @@ Jetson Nano CSI 카메라로 정지 이미지를 빠르게 캡처한다 (Enter=�
 
 ```bash
 python3 capture.py
+```
+
+### 고정 장치 촬영 (위+측면 동시) — [`nano_capture/`](nano_capture/README.md)
+
+장치에 고정된 Jetson Nano + CSI 카메라 2대의 미리보기를 노트북에
+X11 포워딩으로 띄우고, 화면의 CAPTURE 버튼 클릭으로 위/측면 사진
+2장을 동시에 저장한다. 카메라 고정 거리(cm)만 입력하면 되는
+픽셀↔mm 자동 보정 스크립트도 포함.
+
+```bash
+# 노트북에서 나노 접속 후 (자세한 준비 과정은 nano_capture/README.md)
+ssh -Y -C home@192.168.55.1
+python3 dual_capture.py
 ```
 
 ## 참고
