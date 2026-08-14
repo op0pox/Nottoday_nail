@@ -4,18 +4,19 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from pydantic import BaseModel
 from typing import List, Optional, Tuple
 
-from segmentation.nail_segmentation import YoloNailBackend, measure_nail_from_mask, label_fingers_by_x_order
+from segmentation.nail_segmentation import YoloNailBackend, measure_nail_from_mask
 
-# FastAPI 객체 대신 APIRouter를 생성합니다.
 router = APIRouter(prefix="/api")
 
+# 체커보드 규격 하드코딩
 SQUARES_X = 18
 SQUARES_Y = 26
 SQUARE_MM = 10.0
 MARKER_MM = 7.0
-CAMERA_HEIGHT_MM = 295.0
-NAIL_HEIGHT_MM = 0.0
+CAMERA_HEIGHT_MM = 295.0 # 피사체로부터 카메라의 거리
+NAIL_HEIGHT_MM = 0.0 # 바닥에서부터 손톱까지의 높이(원근 오차 보정)
 
+# 세그멘테이션 모델파일과 체커보드 보정 변수 선언
 backend = YoloNailBackend(conf=0.25)
 aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_250)
 board = cv2.aruco.CharucoBoard((SQUARES_X, SQUARES_Y), SQUARE_MM, MARKER_MM, aruco_dict)
@@ -28,12 +29,10 @@ def get_mm_point(charuco_id):
     return (col + 1) * SQUARE_MM, (row + 1) * SQUARE_MM
 
 class MeasurementResult(BaseModel):
-    finger: str
     length_mm: float
     width_mm: Optional[float] = None
-    contours: Optional[List[List[Tuple[int, int]]]] = None  # 다각형 좌표 리스트 추가
+    contours: Optional[List[List[Tuple[int, int]]]] = None 
     
-# @app.post 대신 @router.post를 사용합니다.
 @router.post("/measure", response_model=List[MeasurementResult])
 async def measure_nails(
     file: UploadFile = File(...),
@@ -66,43 +65,28 @@ async def measure_nails(
     if not nail_masks:
         raise HTTPException(status_code=400, detail="Nail detection failed")
 
-    labels = label_fingers_by_x_order(nail_masks, hand=hand)
-    if labels is None:
-        labels = [f"unknown_{i+1}" for i in range(len(nail_masks))]
-
-    for nm, label in zip(nail_masks, labels):
-        nm.finger = label
-
     results = []
     for nm in nail_masks:
-        # 1. 마스크를 컨투어(다각형) 좌표로 변환
-        # nm.mask는 uint8 binary mask 가정
         contours, _ = cv2.findContours(nm.mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
         formatted_contours = []
         for cnt in contours:
-            # 좌표를 (N, 1, 2) 형태에서 (N, 2) 리스트로 변환
             cnt_list = cnt.squeeze().tolist()
-            if not isinstance(cnt_list[0], list): # 점이 1개인 경우 예외 처리
+            if not isinstance(cnt_list[0], list):
                  cnt_list = [cnt_list]
             formatted_contours.append(cnt_list)
 
-        # 2. 측정 수행
         measured = measure_nail_from_mask(
             nm.mask,
             H,
             camera_height_mm=CAMERA_HEIGHT_MM,
             nail_height_mm=NAIL_HEIGHT_MM,
-            finger=nm.finger
         )
         
-        # 3. 결과에 컨투어 정보 포함하여 전송
         if measured:
             results.append(MeasurementResult(
-                finger=nm.finger,
                 length_mm=round(measured["length_mm"], 2),
                 width_mm=round(measured["width_mm"], 2) if measured.get("width_mm") is not None else None,
-                contours=formatted_contours  # 사각형 대신 다각형 좌표 전달
+                contours=formatted_contours  
             ))
 
     return results

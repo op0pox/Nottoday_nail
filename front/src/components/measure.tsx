@@ -3,7 +3,6 @@ import React, { useState, useRef } from 'react';
 export default function NailMeasurement() {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [hand, setHand] = useState<string>('right');
   const [measurementResults, setMeasurementResults] = useState<any[] | null>(null);
   const [imageSize, setImageSize] = useState<{ width: number; height: number }>({ width: 400, height: 300 });
   const imageRef = useRef<HTMLImageElement>(null);
@@ -26,16 +25,11 @@ export default function NailMeasurement() {
     }
   };
 
-  const handleHandToggle = () => {
-    setHand(prev => (prev === 'right' ? 'left' : 'right'));
-  };
-
   const handleSubmit = async () => {
     if (!imageFile) return;
 
     const formData = new FormData();
     formData.append('file', imageFile);
-    formData.append('hand', hand);
 
     try {
       const response = await fetch('http://localhost:8000/api/measure', {
@@ -52,14 +46,6 @@ export default function NailMeasurement() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', marginTop: '50px' }}>
       <h2>손톱 측정</h2>
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: '20px', marginBottom: '20px' }}>
-        <span style={{ fontWeight: hand === 'left' ? 'bold' : 'normal' }}>왼손</span>
-        <button onClick={handleHandToggle} style={{ padding: '10px 20px', cursor: 'pointer' }}>
-          {hand === 'right' ? '오른손 활성화' : '왼손 활성화'}
-        </button>
-        <span style={{ fontWeight: hand === 'right' ? 'bold' : 'normal' }}>오른손</span>
-      </div>
 
       <div style={{ position: 'relative', display: 'inline-block', marginBottom: '20px' }}>
         <input type="file" accept="image/*" onChange={handleFileChange} style={{ marginBottom: '10px', display: 'block' }} />
@@ -121,7 +107,7 @@ export default function NailMeasurement() {
           <ul style={{ listStyle: 'none', padding: 0 }}>
             {measurementResults.map((res, index) => (
               <li key={index} style={{ margin: '10px 0', padding: '10px', backgroundColor: '#f9f9f9', borderRadius: '4px' }}>
-                <strong>{res.finger}</strong> : 길이 {res.length_mm}mm / 폭 {res.width_mm ? `${res.width_mm}mm` : '측정 불가'}
+                 길이 {res.length_mm}mm / 폭 {res.width_mm ? `${res.width_mm}mm` : '측정 불가'}
               </li>
             ))}
           </ul>
