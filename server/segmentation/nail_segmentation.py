@@ -7,9 +7,7 @@ from ultralytics import YOLO
 # 전역변수 설정
 MODEL_URL = "https://huggingface.co/mnemic/nails_seg_yolov8/resolve/main/nails_seg_s_yolov8_v1.pt"
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_DIR = os.path.join(_PROJECT_ROOT, "models")
-MODEL_FILENAME = "nails_seg_s_yolov8_v1.pt"
-DEFAULT_MODEL_PATH = os.path.join(MODEL_DIR, MODEL_FILENAME)
+MODEL_DIR = os.path.join(_PROJECT_ROOT, "models", "nails_seg_s_yolov8_v1.pt")
 
 # 픽셀 좌표를 호모그래피 행렬을 통해 mm 평면 좌표로 변환
 def transform_points_to_mm(homography, points):
@@ -18,47 +16,32 @@ def transform_points_to_mm(homography, points):
     transformed = cv2.perspectiveTransform(pts, H)
     return transformed.reshape(-1, 2)
 
-# 손톱이 플레이트에서 얼마나 떠있는지를 구해 원근 오차보정을 진행
+# 손톱이 플레이트에서 얼마나 떠있는지를 구해 원근오차보정을 진행
+# 손톱이 올라와있다 => 실제보다 조금더 가깝게있다 => 리턴값으로 원근오차 보정(0.1...같은 소수점)값을 보냄
 def nail_height_Calibration(camera_height_mm, nail_height_mm):
     if not camera_height_mm:
         return 1.0
     return (camera_height_mm - nail_height_mm) / camera_height_mm
 
+# 픽셀 두 점 사이의 거리를 mm로 환산하고 원근오차보정
 def measure_length_mm(homography, point_a, point_b, camera_height_mm=295.0, nail_height_mm=0.0):
-    """픽셀 두 점 사이의 거리를 mm로 환산하고 시차 보정을 적용합니다."""
     mm_pts = transform_points_to_mm(homography, [point_a, point_b])
     raw_length_mm = float(np.linalg.norm(mm_pts[0] - mm_pts[1]))
-    return raw_length_mm * nail_height_Calibration(camera_height_mm, nail_height_mm)
+    return raw_length_mm * nail_height_Calibration(camera_height_mm, nail_height_mm) # 위에서 구한 원근오차 보정값을 곱해 실제값(손톱이 플레이트에 딱 붙어있을경우)을 구함
 
-# 마스트
+# 마스크
 class NailMask:
-    def __init__(self, mask, finger=None, confidence=1.0, bbox=None):
+    def __init__(self, mask, confidence=1.0, bbox=None):
         self.mask = mask
-        self.finger = finger
         self.confidence = confidence
         self.bbox = bbox
 
-def ensure_model_downloaded(model_path=None):
-    model_path = model_path or DEFAULT_MODEL_PATH
-    if os.path.exists(model_path):
-        return model_path
-
-    folder = os.path.dirname(model_path)
-    if folder and not os.path.exists(folder):
-        os.makedirs(folder, exist_ok=True)
-
-    try:
-        urllib.request.urlretrieve(MODEL_URL, model_path)
-    except Exception as e:
-        raise RuntimeError(f"모델 다운로드 실패: {e}")
-    return model_path
-
 class YoloNailBackend:
-    def __init__(self, model_path=None, conf=0.25, min_area_ratio=0.0003):
+    def __init__(self, conf=0.25, min_area_ratio=0.0003):
         self.conf = conf
         self.min_area_ratio = min_area_ratio
 
-        weight_path = ensure_model_downloaded(model_path)
+        weight_path = MODEL_DIR
         self.model = YOLO(weight_path)
 
     def segment(self, image_bgr):
@@ -105,7 +88,7 @@ def find_horizontal_width_endpoints(mask, y_mid):
     ys, xs = np.nonzero(mask)
     if len(xs) == 0:
         return None
-
+    
     y_mid_int = int(round(y_mid))
     row_ys = np.unique(ys)
     if y_mid_int not in row_ys:
