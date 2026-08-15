@@ -9,7 +9,7 @@ Nottoday_nail/
 ├── capture.py        # Jetson CSI 카메라 정지 이미지 캡처 CLI
 ├── curvature/        # 곡면 길이 계산기 GUI (P/B/S/C 유형)
 ├── nano_capture/     # Jetson Nano 고정 카메라 2대 촬영 장치 (X11 미리보기 + 버튼 촬영)
-└── segmentation/     # 손톱 세그멘테이션 + 체커보드 실측 GUI
+└── segmentation/     # 손톱 세그멘테이션 + 실측 GUI (고정 거리/체커보드 보정)
     ├── seg_gui.py            # 메인 GUI
     ├── check_setup.py        # 설치 상태 점검 + YOLO 모델 다운로드
     ├── charuco_calibration.py# ChArUco 보드 인식 → 픽셀↔mm 변환
@@ -40,8 +40,10 @@ python3 -m venv .venv
 ### 손톱 세그멘테이션 + 실측 — [`segmentation/`](segmentation/README.md)
 
 위에서(Top)/측면(Side) 사진을 한 장씩 넣으면 인식된 손톱을 전부
-자동 세그멘테이션하고, 사진 속 ChArUco 체커보드를 인식해
-길이/폭을 mm로 실측한다. 결과 이미지는 `results/`에 자동 저장.
+자동 세그멘테이션하고 길이/폭을 mm로 실측한다. 결과는 `results/`에 자동 저장.
+mm 보정은 **고정 거리 보정이 기본** — 카메라가 장치에 고정되어 있으므로
+거리(cm) 입력만으로 보정되며 체커보드 촬영이 필요 없다
+(사진 속 ChArUco 체커보드를 인식하는 방식도 옵션으로 선택 가능).
 
 ```bash
 cd segmentation

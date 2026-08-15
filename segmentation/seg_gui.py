@@ -9,10 +9,13 @@ seg_gui.py — 손톱 세그멘테이션 GUI
     저장한다. (손 전체 사진이면 손톱 5개가 전부, 손가락 1개 사진이면
     1개가 표시된다. 여러 개일 때는 사진 왼쪽부터 1, 2, ... 번호를 붙인다)
 
-    사진 안에 ChArUco 체커보드가 함께 찍혀 있으면 보드를 자동 인식해서
-    픽셀 <-> mm 호모그래피를 계산하고, 손톱의 길이/폭을 mm 단위로
-    실측해 이미지 위에 표시하고 measurements.json으로도 저장한다.
-    (보드가 없으면 픽셀 단위로만 표시)
+    mm 실측(보정)은 세 가지 방식 중 선택한다:
+      1. 고정 거리 보정 (기본) — 카메라가 장치에 고정된 경우, 렌즈~손톱
+         거리(cm)만 입력하면 자동 보정된다. 체커보드 촬영 불필요.
+         (기본값: 위 10.5cm, 측면 7.0cm — GUI 입력칸에서 변경 가능)
+      2. 체커보드(ChArUco) 인식 — 사진 안에 보드가 함께 찍힌 경우
+      3. 보정 없음 — 픽셀 단위로만 표시
+    실측값은 이미지 위에 표시되고 measurements.json으로도 저장된다.
 
 [전체 처리 흐름 — 이 순서대로 코드를 읽으면 이해하기 쉽다]
     1. 사용자가 [이미지 열기] 버튼으로 사진 선택      -> ImagePicker 클래스
@@ -22,7 +25,8 @@ seg_gui.py — 손톱 세그멘테이션 GUI
         메인 스레드에서 돌리면 GUI 창이 그동안 멈춰버린다)
     4. 이미지 한 장 처리                               -> process_image()
        4-1. YOLO로 손톱 마스크 검출                    -> backends/dl_yolo.py
-       4-2. 체커보드 인식해서 픽셀<->mm 변환행렬 계산   -> try_charuco()
+       4-2. 픽셀<->mm 변환행렬 계산                    -> distance_homography()
+            (고정 거리 모드) 또는 try_charuco() (체커보드 모드)
        4-3. 마스크마다 길이/폭 측정                    -> backends/measure_from_mask.py
        4-4. 원본 위에 윤곽선/측정선/mm 텍스트 그리기    -> build_overlay()
     5. 결과 이미지를 results/에 저장                   -> App._worker() 뒷부분
@@ -42,6 +46,11 @@ seg_gui.py — 손톱 세그멘테이션 GUI
     - macOS에서 OpenMP 충돌로 죽는다면: KMP_DUPLICATE_LIB_OK=TRUE 붙여서 실행
     - 체커보드가 인식되지 않는다: 보드 전체가 사진에 나오는지, 반사/초점 확인.
       보드 스펙이 다르면 charuco_calibration.py 상단의 SQUARES_X/Y, SQUARE_MM 수정.
+    - 고정 거리 모드에서 "지원 안 되는 해상도": 사진 해상도로 센서 모드를
+      판별하므로 nano_capture/dual_capture.py로 찍은 원본(1920x1080)을
+      자르거나 리사이즈하지 말고 그대로 넣어야 한다.
+    - 고정 거리 모드 측정값이 실제와 몇 % 다르다: 거리(cm)를 렌즈 표면~손톱
+      표면 기준으로 다시 재서 입력. (1mm 오차 ≈ 측정값 1% 오차)
 """
 
 # ── 표준 라이브러리 ──────────────────────────────────────────────────────────
@@ -147,6 +156,45 @@ def try_charuco(image):
         # 보드가 사진에 없거나 너무 흐릿하면 여기로 온다 -> mm 측정 불가
         print(f"[INFO] 체커보드 인식 실패: {e}")
         return None, None
+
+
+
+# ── 고정 거리 보정 (카메라를 장치에 고정해두고 쓸 때) ────────────────────────
+# 카메라(라즈베리파이 v2, IMX219)가 장치에 고정되어 있으면 렌즈~손톱 거리가
+# 항상 같으므로, 사진마다 체커보드를 찍을 필요 없이 거리만으로
+#   px_per_mm = 초점거리(px) / 거리(mm)
+# 를 계산할 수 있다 (핀홀 카메라 모델). nano_capture/distance_calibration.py와
+# 같은 원리이며, 초점거리(px)는 사진 해상도(=센서 모드)에 따라 달라진다.
+FOCAL_PX_FULL = 3.04 * 1000.0 / 1.12   # IMX219: 초점 3.04mm / 픽셀 1.12um ≈ 2714px
+SENSOR_FOCALS = {
+    (3264, 2464): FOCAL_PX_FULL,        # 풀해상도 (비닝 없음)
+    (1920, 1080): FOCAL_PX_FULL,        # 1080p 크롭 (dual_capture.py 기본)
+    (1640, 1232): FOCAL_PX_FULL / 2,    # 전체 화각 2x2 비닝
+    (1280, 720): FOCAL_PX_FULL / 2,     # 720p 크롭+비닝
+}
+
+# 카메라 고정 거리 기본값 (cm) — 장치를 조정하면 GUI 입력칸에서 바꾸면 된다
+DEFAULT_DISTANCE_CM = {"top": 10.5, "side": 7.0}
+
+
+def distance_homography(image, distance_cm):
+    """
+    고정 거리(cm)로 픽셀->mm 호모그래피(단순 배율 행렬)를 만든다.
+
+    사진 해상도로 센서 모드(비닝 여부)를 판별해 초점거리(px)를 정한다.
+    지원하지 않는 해상도면 (None, 안내문)을 반환한다.
+
+    반환값: (호모그래피 3x3 배열, 설명 문자열)
+    """
+    h, w = image.shape[:2]
+    focal_px = SENSOR_FOCALS.get((w, h)) or SENSOR_FOCALS.get((h, w))  # 세로 사진 대응
+    if focal_px is None:
+        supported = ", ".join(f"{a}x{b}" for (a, b) in SENSOR_FOCALS)
+        return None, f"지원 안 되는 해상도 {w}x{h} (지원: {supported})"
+    px_per_mm = focal_px / (distance_cm * 10.0)
+    s = 1.0 / px_per_mm
+    homography = np.array([[s, 0.0, 0.0], [0.0, s, 0.0], [0.0, 0.0, 1.0]])
+    return homography, f"거리 보정 {distance_cm:g}cm ({px_per_mm:.1f}px/mm)"
 
 
 def sort_masks_by_x(nail_masks):
@@ -280,26 +328,37 @@ def build_overlay(image, nail_masks, measures):
     return overlay
 
 
-def process_image(image, backend, use_charuco):
+def process_image(image, backend, calib_mode, distance_cm=None):
     """
     이미지 한 장의 전체 처리 과정 (이 프로그램의 핵심 함수):
-      세그멘테이션(검출된 손톱 전부) → (선택) 체커보드 실측 → 오버레이 생성
+      세그멘테이션(검출된 손톱 전부) → 픽셀->mm 보정 → 오버레이 생성
+
+    calib_mode:
+      "distance" : 고정 거리(distance_cm)로 자동 보정 — 카메라가 장치에
+                   고정된 경우 (기본). 체커보드 촬영 불필요.
+      "charuco"  : 사진 속 ChArUco 체커보드를 인식해서 보정
+      "none"     : 보정 없이 픽셀 단위만 표시
 
     반환값 딕셔너리:
       overlay          : 결과가 그려진 이미지 (numpy 배열)
       measures         : 손톱별 측정 결과 리스트
-      rms_mm           : 체커보드 보정 오차 (없으면 None)
-      homography_found : 체커보드 인식 성공 여부
+      rms_mm           : 체커보드 보정 오차 (charuco 모드에서만, 없으면 None)
+      homography_found : mm 보정 성공 여부
+      calib_label      : 미리보기 캡션에 쓸 보정 상태 문자열
       detected         : 손톱이 1개라도 검출됐는지
       count            : 검출된 손톱 개수
     """
     # 1) 세그멘테이션: 백엔드가 NailMask 객체 리스트를 반환 (왼쪽부터 정렬)
     nail_masks = sort_masks_by_x(backend.segment(image))
 
-    # 2) 체커보드 인식 (옵션이 켜져 있고, 손톱이 검출된 경우에만 시도)
+    # 2) 픽셀 -> mm 보정 (모드에 따라)
     homography, rms_mm = (None, None)
-    if use_charuco and nail_masks:
+    calib_label = "픽셀 단위"
+    if calib_mode == "distance" and distance_cm:
+        homography, calib_label = distance_homography(image, distance_cm)
+    elif calib_mode == "charuco" and nail_masks:
         homography, rms_mm = try_charuco(image)
+        calib_label = f"보드 RMS {rms_mm:.2f}mm" if homography is not None else "보드 미검출"
 
     # 3) 손톱마다 길이/폭 측정
     measures = []
@@ -308,7 +367,7 @@ def process_image(image, backend, use_charuco):
             # finger를 지정하면 기존 measure_auto.py와 동일한 세로(수직) 측정 방식을 쓴다
             measures.append(measure_nail_from_mask(nm.mask, homography, finger="nail"))
         else:
-            measures.append(measure_pixels(nm.mask))   # 보드 없음 -> 픽셀만
+            measures.append(measure_pixels(nm.mask))   # 보정 없음 -> 픽셀만
 
     # 4) 결과 이미지 생성 + 요약 정보 반환
     return {
@@ -316,6 +375,7 @@ def process_image(image, backend, use_charuco):
         "measures": measures,
         "rms_mm": rms_mm,
         "homography_found": homography is not None,
+        "calib_label": calib_label,
         "detected": bool(nail_masks),
         "count": len(nail_masks),
     }
@@ -443,12 +503,32 @@ class App:
                  highlightthickness=1, highlightbackground=BORDER2,
                  highlightcolor=ACCENT).pack(side=tk.RIGHT, ipady=3)
 
-        # 체커보드 실측 on/off 체크박스 (BooleanVar에 체크 상태가 담긴다)
-        self.charuco_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(left, text="체커보드(ChArUco) 인식해서 mm 실측",
-                       variable=self.charuco_var, bg=BG, fg=TEXT,
-                       activebackground=BG, font=(FONT, 10), anchor='w'
-                       ).pack(fill=tk.X, pady=(6, 12))
+        # ── mm 보정 방식 선택 (라디오 버튼) ──
+        # 기본은 "고정 거리" — 카메라가 장치에 고정되어 있어 거리가 늘 같으므로
+        # 사진마다 체커보드를 찍을 필요가 없다.
+        tk.Label(left, text="mm 보정 방식", bg=BG, fg=MUTED,
+                 font=(FONT, 9, 'bold'), anchor='w').pack(fill=tk.X, pady=(10, 2))
+        self.calib_var = tk.StringVar(value="distance")
+        for value, text in (("distance", "고정 거리 보정 (카메라 고정 시)"),
+                            ("charuco", "체커보드(ChArUco) 인식"),
+                            ("none", "보정 없음 (픽셀만)")):
+            tk.Radiobutton(left, text=text, value=value, variable=self.calib_var,
+                           bg=BG, fg=TEXT, activebackground=BG, anchor='w',
+                           font=(FONT, 10)).pack(fill=tk.X)
+
+        # 고정 거리 입력칸 (cm) — 장치의 렌즈~손톱 거리
+        dist = tk.Frame(left, bg=BG)
+        dist.pack(fill=tk.X, pady=(2, 12))
+        self.dist_vars = {}
+        for kind, label in (("top", "위 거리(cm)"), ("side", "측면 거리(cm)")):
+            tk.Label(dist, text=label, bg=BG, fg=TEXT,
+                     font=(FONT, 10)).pack(side=tk.LEFT, padx=(0, 4))
+            var = tk.StringVar(value=f"{DEFAULT_DISTANCE_CM[kind]:g}")
+            tk.Entry(dist, textvariable=var, width=5, justify='center',
+                     font=(FONT, 11), bg=SURFACE, fg=TEXT, relief='flat',
+                     highlightthickness=1, highlightbackground=BORDER2,
+                     highlightcolor=ACCENT).pack(side=tk.LEFT, padx=(0, 10), ipady=2)
+            self.dist_vars[kind] = var
 
         # ── 실행 버튼 ──
         self.run_btn = FlatButton(left, "세그멘테이션 실행", self._run,
@@ -533,6 +613,18 @@ class App:
             self.status.config(text="⚠ conf는 0과 1 사이 숫자여야 합니다 (예: 0.25)", fg=RED)
             return
 
+        # 고정 거리 모드면 거리 입력값 검증 (양수인지)
+        calib_mode = self.calib_var.get()
+        distances = {}
+        if calib_mode == "distance":
+            try:
+                for kind in inputs:
+                    distances[kind] = float(self.dist_vars[kind].get())
+                    assert distances[kind] > 0
+            except (ValueError, AssertionError):
+                self.status.config(text="⚠ 거리(cm)는 0보다 큰 숫자여야 합니다 (예: 10.5)", fg=RED)
+                return
+
         # 처리 시작: 버튼 잠그고 백그라운드 스레드 시작
         self._running = True
         self.run_btn.set_enabled(False)
@@ -540,12 +632,12 @@ class App:
         # daemon=True: 창을 닫으면 스레드도 같이 종료되게 함
         threading.Thread(
             target=self._worker,
-            args=(inputs, conf, self.charuco_var.get()),
+            args=(inputs, conf, calib_mode, distances),
             daemon=True,
         ).start()
 
     # ── 백그라운드 스레드: 실제 이미지 처리 + 저장 ───────────────────────────
-    def _worker(self, inputs, conf, use_charuco):
+    def _worker(self, inputs, conf, calib_mode, distances):
         try:
             # 백엔드는 무거우니 한 번만 로드하고 재사용한다.
             # 단, conf가 바뀌었으면 새로 만들어야 함 (YOLO에 conf가 박혀있어서)
@@ -571,7 +663,8 @@ class App:
                     raise RuntimeError(f"이미지를 열 수 없습니다: {path}")
 
                 # ★ 핵심 처리 (1부의 파이프라인 함수 호출)
-                res = process_image(image, self.backend, use_charuco)
+                res = process_image(image, self.backend, calib_mode,
+                                    distance_cm=distances.get(kind))
                 results[kind] = res
 
                 # 결과 이미지 저장 (top.png / side.png)
@@ -594,6 +687,8 @@ class App:
                 measurements_json[kind] = {
                     "image_path": path,
                     "detected_count": res["count"],
+                    "calib_mode": calib_mode,
+                    "distance_cm": distances.get(kind),
                     "board_rms_mm": round(res["rms_mm"], 4) if res["rms_mm"] else None,
                     "nails": nails,
                 }
@@ -625,14 +720,12 @@ class App:
             self._photos[kind] = photo   # 참조 보관 (안 하면 이미지가 사라진다!)
             lbl.config(image=photo, text="")
 
-            # 캡션: 검출 개수 + 보드 인식 여부 요약
+            # 캡션: 검출 개수 + 보정 상태 요약
             if not res["detected"]:
                 sub.config(text="검출 실패", fg=RED)
-            elif res["homography_found"]:
-                sub.config(text=f"손톱 {res['count']}개 · 보드 RMS {res['rms_mm']:.2f}mm",
-                           fg=TEXT)
             else:
-                sub.config(text=f"손톱 {res['count']}개 · 보드 미검출", fg=MUTED)
+                sub.config(text=f"손톱 {res['count']}개 · {res['calib_label']}",
+                           fg=TEXT if res["homography_found"] else MUTED)
 
         # 왼쪽 실측 결과 카드 갱신
         self.result_lbl.config(text=self._format_measurements(results))
