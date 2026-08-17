@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.api
+    container_name: server
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./server:/app/server
+    restart: always
+
+  front:
+    build:
+      context: .
+      dockerfile: dockerfiles/Dockerfile.front
+    container_name: front
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./front:/app/front
+      - /app/front/node_modules
+    restart: always

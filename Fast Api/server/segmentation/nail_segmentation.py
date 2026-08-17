@@ -65,9 +65,9 @@ class YoloNailBackend:
                 continue
             candidates.append((binary, float(confs[i]), area))
 
-        if len(candidates) > 5:
-            candidates.sort(key=lambda c: c[1], reverse=True)
-            candidates = candidates[:5]
+            if len(candidates) > 5:
+                candidates.sort(key=lambda c: c[1], reverse=True)
+                candidates = candidates[:5]
 
         nail_masks = []
         for binary, conf, _area in candidates:
