@@ -75,32 +75,35 @@ class YoloNailBackend:
             nail_masks.append(NailMask(mask=binary, confidence=conf, bbox=(x, y, bw, bh)))
         return nail_masks
 
-def find_vertical_axis_endpoints(mask):
-    ys, xs = np.nonzero(mask)
-    if len(xs) == 0:
-        return None
-    cx = float(xs.mean())
-    y_min = float(ys.min())
-    y_max = float(ys.max())
-    return np.array([cx, y_min]), np.array([cx, y_max])
-
-def find_horizontal_width_endpoints(mask, y_mid):
-    ys, xs = np.nonzero(mask)
-    if len(xs) == 0:
-        return None
+def find_endpoints(mask, y_mid=0, flag="vertical"):
+    if flag == "vertical":
+        ys, xs = np.nonzero(mask)
+        if len(xs) == 0:
+            return None
+        cx = float(xs.mean())
+        y_min = float(ys.min())
+        y_max = float(ys.max())
+        return np.array([cx, y_min]), np.array([cx, y_max])
+    elif flag == "horizontal":
+        ys, xs = np.nonzero(mask)
+        if len(xs) == 0:
+            return None
+        
+        y_mid_int = int(round(y_mid))
+        row_ys = np.unique(ys)
+        if y_mid_int not in row_ys:
+            y_mid_int = int(row_ys[np.argmin(np.abs(row_ys - y_mid_int))])
     
-    y_mid_int = int(round(y_mid))
-    row_ys = np.unique(ys)
-    if y_mid_int not in row_ys:
-        y_mid_int = int(row_ys[np.argmin(np.abs(row_ys - y_mid_int))])
+        row_xs = xs[ys == y_mid_int]
+        x_left = float(row_xs.min())
+        x_right = float(row_xs.max())
+        return np.array([x_left, float(y_mid_int)]), np.array([x_right, float(y_mid_int)])
+    else:
+        print(f"현재 flag변수 = {flag} => 잘못된 변수값")
 
-    row_xs = xs[ys == y_mid_int]
-    x_left = float(row_xs.min())
-    x_right = float(row_xs.max())
-    return np.array([x_left, float(y_mid_int)]), np.array([x_right, float(y_mid_int)])
 
-def measure_nail_from_mask(mask, homography, camera_height_mm=295.0, nail_height_mm=0.0):
-    endpoints = find_vertical_axis_endpoints(mask)
+def measure_nail_from_mask(mask, homography, camera_height_mm=100.0, nail_height_mm=0.0):
+    endpoints = find_endpoints(mask,y_mid=0, flags="vertical")
     if endpoints is None:
         return None
     p1, p2 = endpoints
@@ -111,7 +114,7 @@ def measure_nail_from_mask(mask, homography, camera_height_mm=295.0, nail_height
     )
 
     y_mid = (float(p1[1]) + float(p2[1])) / 2.0
-    width_endpoints = find_horizontal_width_endpoints(mask, y_mid)
+    width_endpoints = find_endpoints(mask, y_mid, flags="horizontal")
     
     if width_endpoints is not None:
         w1, w2 = width_endpoints

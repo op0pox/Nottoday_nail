@@ -66,8 +66,8 @@ async def measure_nails(
         raise HTTPException(status_code=400, detail="Nail detection failed")
 
     results = []
-    for nm in nail_masks:
-        contours, _ = cv2.findContours(nm.mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    for nail_mask in nail_masks:
+        contours, _ = cv2.findContours(nail_mask.mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         formatted_contours = []
         for cnt in contours:
             cnt_list = cnt.squeeze().tolist()
@@ -76,7 +76,7 @@ async def measure_nails(
             formatted_contours.append(cnt_list)
 
         measured = measure_nail_from_mask(
-            nm.mask,
+            nail_mask.mask,
             H,
             camera_height_mm=CAMERA_HEIGHT_MM,
             nail_height_mm=NAIL_HEIGHT_MM,
