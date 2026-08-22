@@ -10,4 +10,5 @@ __pycache__/
 venv/
 
 #학습데이터 제외
-Training/YOLODataset/
+Training/*
+!Training/train.py

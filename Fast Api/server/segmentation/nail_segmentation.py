@@ -5,7 +5,7 @@ import numpy as np
 from ultralytics import YOLO
 
 # 전역변수 설정
-MODEL_URL = "https://huggingface.co/mnemic/nails_seg_yolov8/resolve/main/nails_seg_s_yolov8_v1.pt"
+MODEL_URL = r"C:\Users\USER\vscode-workspace\Nottoday_nail\Training\Train_model\nail_segmentation\weights\last.pt"
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL_DIR = os.path.join(_PROJECT_ROOT, "models", "nails_seg_s_yolov8_v1.pt")
 
@@ -102,7 +102,7 @@ def find_endpoints(mask, y_mid=0, flag="vertical"):
 
 
 def measure_nail_from_mask(mask, homography, camera_height_mm=100.0, nail_height_mm=0.0):
-    endpoints = find_endpoints(mask,y_mid=0, flags="vertical")
+    endpoints = find_endpoints(mask, "vertical")
     if endpoints is None:
         return None
     p1, p2 = endpoints
@@ -113,7 +113,7 @@ def measure_nail_from_mask(mask, homography, camera_height_mm=100.0, nail_height
     )
 
     y_mid = (float(p1[1]) + float(p2[1])) / 2.0
-    width_endpoints = find_endpoints(mask, y_mid, flags="horizontal")
+    width_endpoints = find_endpoints(mask, y_mid, "horizontal")
     
     if width_endpoints is not None:
         w1, w2 = width_endpoints
