@@ -8,3 +8,6 @@ __pycache__/
 *.pyo
 .venv/
 venv/
+
+#학습데이터 제외
+Training/YOLODataset/

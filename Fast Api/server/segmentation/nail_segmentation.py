@@ -40,7 +40,6 @@ class YoloNailBackend:
     def __init__(self, conf=0.25, min_area_ratio=0.0003):
         self.conf = conf
         self.min_area_ratio = min_area_ratio
-
         weight_path = MODEL_DIR
         self.model = YOLO(weight_path)
 
