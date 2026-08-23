@@ -1,5 +1,6 @@
 from ultralytics import YOLO
 import os
+import datetime
 
 if __name__ == '__main__':
     # 일단 온라인 모델 가져오기
@@ -12,8 +13,8 @@ if __name__ == '__main__':
     results = model.train(
         data="YOLODataset/dataset.yaml", # yolo데이터의 위치
         epochs=50,
-        imgsz=640,
-        batch=16,
+        imgsz=1024,
+        batch=8,
         project=os.path.join(target_project, "Train_model"), 
-        name="nail_segmentation"
+        name=f"nail_segmentation_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}"
     )
