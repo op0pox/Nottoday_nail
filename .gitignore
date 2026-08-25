@@ -9,6 +9,15 @@ __pycache__/
 .venv/
 venv/
 
-#학습데이터 제외
+#학습데이터만 제외
+# 이 명령어는 검사조차안하고 바로 스킵함
 Training/*
+# 위쪽의 전체 폴더 스킵대신 하위경로를 열고 다시 닫음으로써 weights폴더만 접근
+!Training/Train_model/
+!Training/Train_model/nail_segmentation_*/
+Training/Train_model/nail_segmentation*/*
+!Training/Train_model/nail_segmentation*/weights/
+!Training/Train_model/nail_segmentation*/weights/*.pt
+
 !Training/train.py
+!Training/test.py
