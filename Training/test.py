@@ -6,13 +6,13 @@ import datetime
 from ultralytics import YOLO
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-old_model_path = os.path.join(PROJECT_ROOT, "Fast Api", "server", "models", "nails_seg_s_yolov8_v1.pt")
-new_model_path = os.path.join(PROJECT_ROOT, "Training", "Train_model", "nail_segmentation_20260823_183100", "weights", "best.pt")
+old_model_path = os.path.join(PROJECT_ROOT, "Training", "Train_model", "nail_segmentation_24people", "weights", "best.pt")
+new_model_path = os.path.join(PROJECT_ROOT, "Training", "Train_model", "nail_segmentation_33people", "weights", "best.pt")
 
 old_model = YOLO(old_model_path)
 new_model = YOLO(new_model_path)
 
-test_dir = os.path.join(os.path.dirname(os.path.dirname(PROJECT_ROOT)), "Downloads", "TestDataSet", "YOLODataset")
+test_dir = os.path.join(PROJECT_ROOT, "Training", "TestDataSet", "YOLODataset")
 image_dir = os.path.join(test_dir, "images", "test")
 label_dir = os.path.join(test_dir, "labels", "test")
 output_dir = os.path.join(PROJECT_ROOT, "Training", "results")
