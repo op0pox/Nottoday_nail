@@ -28,16 +28,11 @@ def calculate_chamfer_distance(contour1, contour2):
     
     return dist1 + dist2
 
-def classify_nail_shape(mask, template_json_path):
+def classify_nail_shape(contour, template_json_path):
     with open(template_json_path, 'r', encoding='utf-8') as f:
         templates = json.load(f)
         
-    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-    if not contours:
-        return None, None
-        
-    main_contour = max(contours, key=cv2.contourArea)
-    norm_input = normalize_contour(main_contour)
+    norm_input = normalize_contour(contour)
     
     best_shape = None
     min_dist = float('inf')
