@@ -108,6 +108,8 @@ export default function NailMeasurement() {
             {measurementResults.map((res, index) => (
               <li key={index} style={{ margin: '10px 0', padding: '10px', backgroundColor: '#f9f9f9', borderRadius: '4px' }}>
                  길이 {res.length_mm}mm / 폭 {res.width_mm ? `${res.width_mm}mm` : '측정 불가'}
+                 {res.shape ? ` / 쉐입 ${res.shape}` : ''}
+                 {res.shape_score != null ? ` (${res.shape_score})` : ''}
               </li>
             ))}
           </ul>

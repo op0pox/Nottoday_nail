@@ -14,7 +14,7 @@ SQUARES_X = 18
 SQUARES_Y = 26
 SQUARE_MM = 10.0
 MARKER_MM = 7.0
-CAMERA_HEIGHT_MM = 295.0 # 피사체로부터 카메라의 거리
+CAMERA_HEIGHT_MM = 108.0 # 피사체 <=> 카메라10.8cm
 NAIL_HEIGHT_MM = 0.0 # 바닥에서부터 손톱까지의 높이(원근 오차 보정)
 
 # 세그멘테이션 모델파일과 체커보드 보정 변수 선언

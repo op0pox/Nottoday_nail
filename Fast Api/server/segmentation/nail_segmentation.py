@@ -24,7 +24,7 @@ def nail_height_Calibration(camera_height_mm, nail_height_mm):
     return (camera_height_mm - nail_height_mm) / camera_height_mm
 
 # 픽셀 두 점 사이의 거리를 mm로 환산하고 원근오차보정
-def measure_length_mm(homography, point_a, point_b, camera_height_mm=295.0, nail_height_mm=0.0):
+def measure_length_mm(homography, point_a, point_b, camera_height_mm=108.0, nail_height_mm=0.0):
     mm_pts = transform_points_to_mm(homography, [point_a, point_b])
     raw_length_mm = float(np.linalg.norm(mm_pts[0] - mm_pts[1]))
     return raw_length_mm * nail_height_Calibration(camera_height_mm, nail_height_mm) # 위에서 구한 원근오차 보정값을 곱해 실제값(손톱이 플레이트에 딱 붙어있을경우)을 구함
@@ -101,7 +101,7 @@ def find_endpoints(mask, y_mid=0, flag="vertical"):
         print(f"현재 flag변수 = {flag} => 잘못된 변수값")
 
 
-def measure_nail_from_mask(mask, homography, camera_height_mm=100.0, nail_height_mm=0.0):
+def measure_nail_from_mask(mask, homography, camera_height_mm=108.0, nail_height_mm=0.0):
     endpoints = find_endpoints(mask, "vertical")
     if endpoints is None:
         return None
@@ -114,7 +114,8 @@ def measure_nail_from_mask(mask, homography, camera_height_mm=100.0, nail_height
 
     y_mid = (float(p1[1]) + float(p2[1])) / 2.0
     width_endpoints = find_endpoints(mask, y_mid, "horizontal")
-    
+
+    width_mm = None
     if width_endpoints is not None:
         w1, w2 = width_endpoints
         width_mm = measure_length_mm(
