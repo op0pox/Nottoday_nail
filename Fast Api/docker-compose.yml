@@ -6,10 +6,16 @@ services:
       context: .
       dockerfile: dockerfiles/Dockerfile.api
     container_name: server
+    env_file:
+      - .env
+    environment:
+      MODEL_DIR: /app/train_model/nail_segmentation_33people/weights/last.pt
     ports:
       - "8000:8000"
     volumes:
       - ./server:/app/server
+      - ./nail_shape:/app/nail_shape
+      - ../Training/Train_model:/app/train_model:ro # 읽기 전용으로 연결
     restart: always
 
   front:
