@@ -8,7 +8,7 @@ app = FastAPI(title="Nail Measurement API")
 # cors문제 해결
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], 
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

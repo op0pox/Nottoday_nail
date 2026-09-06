@@ -1,13 +1,12 @@
 import os
-import urllib.request
+
 import cv2
 import numpy as np
 from ultralytics import YOLO
 
-# 전역변수 설정
-MODEL_URL = r"C:\Users\USER\vscode-workspace\Nottoday_nail\Training\Train_model\nail_segmentation\weights\last.pt"
-_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MODEL_DIR = os.path.join(_PROJECT_ROOT, "models", "nails_seg_s_yolov8_v1.pt")
+MODEL_DIR = os.getenv("MODEL_DIR")
+CAMERA_HEIGHT_MM = float(os.getenv("CAMERA_HEIGHT_MM"))
+NAIL_HEIGHT_MM = float(os.getenv("NAIL_HEIGHT_MM"))
 
 # 픽셀 좌표를 호모그래피 행렬을 통해 mm 평면 좌표로 변환
 def transform_points_to_mm(homography, points):
@@ -24,7 +23,7 @@ def nail_height_Calibration(camera_height_mm, nail_height_mm):
     return (camera_height_mm - nail_height_mm) / camera_height_mm
 
 # 픽셀 두 점 사이의 거리를 mm로 환산하고 원근오차보정
-def measure_length_mm(homography, point_a, point_b, camera_height_mm=108.0, nail_height_mm=0.0):
+def measure_length_mm(homography, point_a, point_b, camera_height_mm=CAMERA_HEIGHT_MM, nail_height_mm=NAIL_HEIGHT_MM):
     mm_pts = transform_points_to_mm(homography, [point_a, point_b])
     raw_length_mm = float(np.linalg.norm(mm_pts[0] - mm_pts[1]))
     return raw_length_mm * nail_height_Calibration(camera_height_mm, nail_height_mm) # 위에서 구한 원근오차 보정값을 곱해 실제값(손톱이 플레이트에 딱 붙어있을경우)을 구함
@@ -40,33 +39,38 @@ class YoloNailBackend:
     def __init__(self, conf=0.25, min_area_ratio=0.0003):
         self.conf = conf
         self.min_area_ratio = min_area_ratio
-        weight_path = MODEL_DIR
-        self.model = YOLO(weight_path)
+        if not MODEL_DIR:
+            raise RuntimeError("MODEL_DIR is not set")
+        if not MODEL_DIR.startswith(("http://", "https://")) and not os.path.isfile(MODEL_DIR):
+            raise FileNotFoundError(f"YOLO weights not found: {MODEL_DIR}")
+        self.model = YOLO(MODEL_DIR)
 
     def segment(self, image_bgr):
         h, w = image_bgr.shape[:2]
         results = self.model.predict(image_bgr, conf=self.conf, verbose=False)
         result = results[0]
 
-        if result.masks is None or len(result.masks.data) == 0:
+        if result.masks is None or len(result.masks.xy) == 0:
             return []
 
-        mask_data = result.masks.data.cpu().numpy()
-        confs = result.boxes.conf.cpu().numpy() if result.boxes is not None else np.ones(mask_data.shape[0])
-
-        candidates = []
+        confs = result.boxes.conf.cpu().numpy() if result.boxes is not None else np.ones(len(result.masks.xy))
         min_area = self.min_area_ratio * w * h
-        for i in range(mask_data.shape[0]):
-            resized = cv2.resize(mask_data[i], (w, h), interpolation=cv2.INTER_NEAREST)
-            binary = (resized > 0.5).astype(np.uint8) * 255
+        candidates = []
+
+        for i, seg in enumerate(result.masks.xy):
+            pts = np.asarray(seg, dtype=np.int32).reshape(-1, 1, 2)
+            if len(pts) < 3:
+                continue
+            binary = np.zeros((h, w), dtype=np.uint8)
+            cv2.fillPoly(binary, [pts], 255)
             area = int(np.count_nonzero(binary))
             if area < min_area:
                 continue
             candidates.append((binary, float(confs[i]), area))
 
-            if len(candidates) > 5:
-                candidates.sort(key=lambda c: c[1], reverse=True)
-                candidates = candidates[:5]
+        if len(candidates) > 5:
+            candidates.sort(key=lambda c: c[1], reverse=True)
+            candidates = candidates[:5]
 
         nail_masks = []
         for binary, conf, _area in candidates:
@@ -101,8 +105,8 @@ def find_endpoints(mask, y_mid=0, flag="vertical"):
         print(f"현재 flag변수 = {flag} => 잘못된 변수값")
 
 
-def measure_nail_from_mask(mask, homography, camera_height_mm=108.0, nail_height_mm=0.0):
-    endpoints = find_endpoints(mask, "vertical")
+def measure_nail_from_mask(mask, homography, camera_height_mm=CAMERA_HEIGHT_MM, nail_height_mm=NAIL_HEIGHT_MM):
+    endpoints = find_endpoints(mask, flag="vertical")
     if endpoints is None:
         return None
     p1, p2 = endpoints

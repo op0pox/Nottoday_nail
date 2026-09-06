@@ -4,8 +4,23 @@ export default function NailMeasurement() {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [measurementResults, setMeasurementResults] = useState<any[] | null>(null);
-  const [imageSize, setImageSize] = useState<{ width: number; height: number }>({ width: 400, height: 300 });
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [imageSize, setImageSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  const [displaySize, setDisplaySize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
   const imageRef = useRef<HTMLImageElement>(null);
+
+  const syncImageSize = () => {
+    const img = imageRef.current;
+    if (!img) return;
+    setImageSize({
+      width: img.naturalWidth,
+      height: img.naturalHeight,
+    });
+    setDisplaySize({
+      width: img.clientWidth,
+      height: img.clientHeight,
+    });
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files.length > 0) {
@@ -13,16 +28,12 @@ export default function NailMeasurement() {
       setImageFile(file);
       setImagePreview(URL.createObjectURL(file));
       setMeasurementResults(null);
+      setErrorMessage(null);
     }
   };
 
   const handleImageLoad = () => {
-    if (imageRef.current) {
-      setImageSize({
-        width: imageRef.current.naturalWidth,
-        height: imageRef.current.naturalHeight,
-      });
-    }
+    syncImageSize();
   };
 
   const handleSubmit = async () => {
@@ -37,9 +48,29 @@ export default function NailMeasurement() {
         body: formData,
       });
       const data = await response.json();
+      if (!response.ok) {
+        const detail = data?.detail;
+        setMeasurementResults(null);
+        setErrorMessage(
+          typeof detail === 'string'
+            ? detail
+            : Array.isArray(detail)
+              ? detail.map((item: { msg?: string }) => item?.msg ?? JSON.stringify(item)).join('\n')
+              : '측정에 실패했습니다.'
+        );
+        return;
+      }
+      if (!Array.isArray(data)) {
+        setMeasurementResults(null);
+        setErrorMessage('예상하지 못한 응답입니다.');
+        return;
+      }
+      setErrorMessage(null);
       setMeasurementResults(data);
     } catch (error) {
       console.error(error);
+      setMeasurementResults(null);
+      setErrorMessage('서버에 연결하지 못했습니다.');
     }
   };
 
@@ -51,34 +82,43 @@ export default function NailMeasurement() {
         <input type="file" accept="image/*" onChange={handleFileChange} style={{ marginBottom: '10px', display: 'block' }} />
 
         {imagePreview && (
-          <div style={{ position: 'relative', display: 'inline-block' }}>
+          <div style={{ position: 'relative', display: 'block', width: 'fit-content', lineHeight: 0 }}>
             <img
               ref={imageRef}
               src={imagePreview}
               alt="preview"
               onLoad={handleImageLoad}
-              style={{ maxWidth: '400px', display: 'block', borderRadius: '4px' }}
+              style={{ maxWidth: '400px', width: '100%', height: 'auto', display: 'block', borderRadius: '4px' }}
             />
 
-            {measurementResults && (
+            {Array.isArray(measurementResults) && imageSize.width > 0 && displaySize.width > 0 && (
               <svg
+                width={displaySize.width}
+                height={displaySize.height}
+                viewBox={`0 0 ${imageSize.width} ${imageSize.height}`}
+                preserveAspectRatio="xMidYMid meet"
                 style={{
                   position: 'absolute',
                   top: 0,
                   left: 0,
-                  width: '100%',
-                  height: '100%',
                   pointerEvents: 'none',
                 }}
-                viewBox={`0 0 ${imageSize.width} ${imageSize.height}`}
-                preserveAspectRatio="none"
               >
                 {measurementResults.map((res, index) => {
-                  if (!res.contours) return null;
+                  if (!Array.isArray(res.contours)) return null;
 
-                  const d = res.contours.map((cnt: number[][]) =>
-    `M ${cnt.map((p: number[]) => p.join(',')).join(' L ')} Z`
-  ).join(' ');
+                  const d = res.contours
+                    .filter((cnt: unknown) => Array.isArray(cnt) && cnt.length > 0)
+                    .map((cnt: number[][]) => {
+                      const pts = cnt
+                        .filter((p) => Array.isArray(p) && p.length >= 2)
+                        .map((p) => `${p[0]},${p[1]}`);
+                      if (pts.length === 0) return '';
+                      return `M ${pts.join(' L ')} Z`;
+                    })
+                    .join(' ');
+
+                  if (!d.trim()) return null;
 
                   return (
                     <g key={index}>
@@ -101,7 +141,11 @@ export default function NailMeasurement() {
         API 전송 및 탐지
       </button>
 
-      {measurementResults && (
+      {errorMessage && (
+        <p style={{ marginTop: '16px', color: '#c00' }}>{errorMessage}</p>
+      )}
+
+      {Array.isArray(measurementResults) && (
         <div style={{ marginTop: '30px', textAlign: 'center', width: '350px' }}>
           <h3>측정 결과</h3>
           <ul style={{ listStyle: 'none', padding: 0 }}>
