@@ -2,6 +2,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.api import router as measure_router
+from api.compare import router as compare_router
 
 app = FastAPI(title="Nail Measurement API")
 
@@ -16,6 +17,7 @@ app.add_middleware(
 
 # api라우터
 app.include_router(measure_router)
+app.include_router(compare_router)
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
