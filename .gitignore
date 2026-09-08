@@ -19,5 +19,10 @@ Training/Train_model/nail_segmentation*/*
 !Training/Train_model/nail_segmentation*/weights/
 !Training/Train_model/nail_segmentation*/weights/*.pt
 
+Fast Api/nail_shape/*
+!Fast Api/nail_shape/fingers/
+!Fast Api/nail_shape/fingers/**
+!Fast Api/nail_shape/shapes.json
+
 !Training/train.py
 !Training/test.py
