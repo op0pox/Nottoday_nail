@@ -1,149 +1,253 @@
+import math
 import os
+import datetime
+
 import cv2
 import numpy as np
-import math
-import datetime
 from ultralytics import YOLO
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-old_model_path = os.path.join(PROJECT_ROOT, "Training", "Train_model", "nail_segmentation_24people", "weights", "best.pt")
-new_model_path = os.path.join(PROJECT_ROOT, "Training", "Train_model", "nail_segmentation_33people", "weights", "best.pt")
+# 선 색 (OpenCV BGR)
+# 초록 (0, 255, 0) : GT 정답 폴리곤
+# 파랑 (255, 0, 0) : Old 모델 예측
+# 빨강 (0, 0, 255) : New 모델 예측
 
-old_model = YOLO(old_model_path)
-new_model = YOLO(new_model_path)
+TRAINING_DIR = os.path.dirname(os.path.abspath(__file__))
 
-test_dir = os.path.join(PROJECT_ROOT, "Training", "TestDataSet", "YOLODataset")
-image_dir = os.path.join(test_dir, "images", "test")
-label_dir = os.path.join(test_dir, "labels", "test")
-output_dir = os.path.join(PROJECT_ROOT, "Training", "results")
-os.makedirs(output_dir, exist_ok=True)
+OLD_MODEL_PATH = os.path.join(TRAINING_DIR, "Train_model", "nail_segmentation_24people", "weights", "best.pt")
+NEW_MODEL_PATH = os.path.join(TRAINING_DIR, "Train_model", "nail_segmentation_croped", "weights", "best.pt")
 
-grid_images = []
-data_records = []
+# TestDataset 하위폴더중 YOLODataset폴더중 선택
+TEST_DATASET_NAME = "YOLODataset_fulldata_online"
 
-for file_name in os.listdir(image_dir):
-    if not file_name.lower().endswith(('.png', '.jpg', '.jpeg')):
-        continue
+CELL_W = 960
+CELL_H = 420
+GRID_COLS = 2
+MAX_JPEG_DIM = 65000
 
-    image_path = os.path.join(image_dir, file_name)
-    txt_name = os.path.splitext(file_name)[0] + ".txt"
-    txt_path = os.path.join(label_dir, txt_name)
+OUTPUT_DIR = os.path.join(TRAINING_DIR, "results")
 
-    if not os.path.exists(txt_path):
-        continue
 
-    img_array = np.fromfile(image_path, np.uint8)
-    img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-    
-    if img is None:
-        continue
+def imread_unicode(path):
+    img_array = np.fromfile(path, np.uint8)
+    return cv2.imdecode(img_array, cv2.IMREAD_COLOR)
 
-    h, w = img.shape[:2]
 
-    gt_polygons = []
+def imwrite_unicode(path, image):
+    ext = os.path.splitext(path)[1]
+    ok, encoded = cv2.imencode(ext, image)
+    if not ok:
+        scale = min(MAX_JPEG_DIM / image.shape[0], MAX_JPEG_DIM / image.shape[1], 1.0)
+        if scale < 1.0:
+            image = cv2.resize(image, (int(image.shape[1] * scale), int(image.shape[0] * scale)))
+            ok, encoded = cv2.imencode(ext, image)
+    if not ok:
+        raise RuntimeError(f"이미지 저장 실패: {path} size={image.shape}")
+    encoded.tofile(path)
+
+
+def letterbox(image, cell_w, cell_h):
+    h, w = image.shape[:2]
+    scale = min(cell_w / w, cell_h / h)
+    new_w = max(1, int(w * scale))
+    new_h = max(1, int(h * scale))
+    resized = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    canvas = np.full((cell_h, cell_w, 3), 255, dtype=np.uint8)
+    y0 = (cell_h - new_h) // 2
+    x0 = (cell_w - new_w) // 2
+    canvas[y0:y0 + new_h, x0:x0 + new_w] = resized
+    return canvas
+
+
+def load_gt_polygons(txt_path, width, height):
+    polygons = []
     with open(txt_path, "r", encoding="utf-8") as f:
         for line in f:
             parts = list(map(float, line.strip().split()))
             if len(parts) > 1:
                 coords = np.array(parts[1:]).reshape(-1, 2)
-                coords[:, 0] *= w
-                coords[:, 1] *= h
-                gt_polygons.append(coords.astype(np.int32))
+                coords[:, 0] *= width
+                coords[:, 1] *= height
+                polygons.append(coords.astype(np.int32))
+    return polygons
 
-    mask_gt = np.zeros((h, w), dtype=np.uint8)
-    cv2.fillPoly(mask_gt, gt_polygons, 255)
 
-    old_results = old_model.predict(img, verbose=False)[0]
-    new_results = new_model.predict(img, verbose=False)[0]
+def mask_from_polygons(shape, polygons):
+    mask = np.zeros(shape, dtype=np.uint8)
+    if polygons:
+        cv2.fillPoly(mask, polygons, 255)
+    return mask
 
-    img_old = img.copy()
-    mask_old = np.zeros((h, w), dtype=np.uint8)
-    if old_results.masks is not None:
-        for seg in old_results.masks.xy:
+
+def draw_predictions(image, results, color):
+    mask = np.zeros(image.shape[:2], dtype=np.uint8)
+    drawn = image.copy()
+    if results.masks is not None:
+        for seg in results.masks.xy:
             pts = np.array(seg, dtype=np.int32)
-            cv2.polylines(img_old, [pts], isClosed=True, color=(255, 0, 0), thickness=3)
-            cv2.fillPoly(mask_old, [pts], 255)
+            cv2.polylines(drawn, [pts], isClosed=True, color=color, thickness=2)
+            cv2.fillPoly(mask, [pts], 255)
+    return drawn, mask
 
-    img_new = img.copy()
-    mask_new = np.zeros((h, w), dtype=np.uint8)
-    if new_results.masks is not None:
-        for seg in new_results.masks.xy:
-            pts = np.array(seg, dtype=np.int32)
-            cv2.polylines(img_new, [pts], isClosed=True, color=(0, 0, 255), thickness=3)
-            cv2.fillPoly(mask_new, [pts], 255)
 
-    cv2.polylines(img_old, gt_polygons, isClosed=True, color=(0, 255, 0), thickness=3)
-    cv2.polylines(img_new, gt_polygons, isClosed=True, color=(0, 255, 0), thickness=3)
+def iou(mask_a, mask_b):
+    intersection = np.logical_and(mask_a, mask_b)
+    union = np.logical_or(mask_a, mask_b)
+    union_sum = np.sum(union)
+    return np.sum(intersection) / union_sum if union_sum > 0 else 0.0
 
-    intersection_old = np.logical_and(mask_gt, mask_old)
-    union_old = np.logical_or(mask_gt, mask_old)
-    iou_old = np.sum(intersection_old) / np.sum(union_old) if np.sum(union_old) > 0 else 0.0
 
-    intersection_new = np.logical_and(mask_gt, mask_new)
-    union_new = np.logical_or(mask_gt, mask_new)
-    iou_new = np.sum(intersection_new) / np.sum(union_new) if np.sum(union_new) > 0 else 0.0
+def short_name(file_name):
+    return os.path.splitext(file_name)[0][:12]
 
-    font_scale = max(2, w // 800)
-    thickness = max(3, int(font_scale * 2))
 
-    cv2.putText(img_old, f"Old IoU: {iou_old:.4f}", (50, 150 * font_scale), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 0, 0), thickness)
-    cv2.putText(img_new, f"New IoU: {iou_new:.4f}", (50, 150 * font_scale), cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 255), thickness)
+def put_label(image, text, color):
+    h, w = image.shape[:2]
+    scale = max(0.7, min(h, w) / 280)
+    thick = max(2, int(scale * 2))
+    cv2.putText(image, text, (8, int(28 * scale) + 8), cv2.FONT_HERSHEY_SIMPLEX, scale, (0, 0, 0), thick + 2)
+    cv2.putText(image, text, (8, int(28 * scale) + 8), cv2.FONT_HERSHEY_SIMPLEX, scale, color, thick)
 
-    combined = np.hstack((img_old, img_new))
-    
-    target_w = 2400
-    target_h = int(combined.shape[0] * (target_w / combined.shape[1]))
-    resized_combined = cv2.resize(combined, (target_w, target_h))
-    
-    cv2.putText(resized_combined, file_name, (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 2, (0, 0, 0), 8)
-    cv2.putText(resized_combined, file_name, (30, 80), cv2.FONT_HERSHEY_SIMPLEX, 2, (255, 255, 255), 3)
 
-    grid_images.append(resized_combined)
-    data_records.append((file_name, iou_old, iou_new))
+def build_legend(width):
+    h = 70
+    canvas = np.full((h, width, 3), 255, dtype=np.uint8)
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    items = [
+        ((0, 255, 0), "Green: 정답지"),
+        ((255, 0, 0), "Blue: 기존모델"),
+        ((0, 0, 255), "Red: 신규모델"),
+    ]
+    x = 30
+    for color, text in items:
+        y = 42
+        cv2.line(canvas, (x, y - 8), (x + 50, y - 8), color, 6)
+        cv2.putText(canvas, text, (x + 60, y), font, 1.0, (0, 0, 0), 2)
+        x += 420
+    return canvas
 
-if grid_images:
-    cols = 2 if len(grid_images) > 1 else 1
-    rows = math.ceil(len(grid_images) / cols)
-    
-    cell_w = max(img.shape[1] for img in grid_images)
-    cell_h = max(img.shape[0] for img in grid_images)
-    
-    grid_canvas = np.full((rows * cell_h, cols * cell_w, 3), 255, dtype=np.uint8)
-    
-    for idx, img in enumerate(grid_images):
+
+def build_grid(cells, cols, cell_w, cell_h):
+    rows = math.ceil(len(cells) / cols)
+    canvas = np.full((rows * cell_h, cols * cell_w, 3), 255, dtype=np.uint8)
+    for idx, cell in enumerate(cells):
         r = idx // cols
         c = idx % cols
-        h_i, w_i = img.shape[:2]
-        grid_canvas[r*cell_h : r*cell_h+h_i, c*cell_w : c*cell_w+w_i] = img
+        canvas[r * cell_h:(r + 1) * cell_h, c * cell_w:(c + 1) * cell_w] = cell
+    return canvas
 
-    table_w = grid_canvas.shape[1]
-    row_h = 120
-    table_h = (len(data_records) + 2) * row_h
-    table_canvas = np.full((table_h, table_w, 3), 255, dtype=np.uint8)
-    
+
+def build_table(records, width):
+    row_h = 58
+    table_h = (len(records) + 3) * row_h
+    canvas = np.full((table_h, width, 3), 255, dtype=np.uint8)
     font = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = max(1, table_w // 1500)
-    thick = max(2, int(font_scale * 1.5))
-    
-    col_x = [int(table_w * 0.05), int(table_w * 0.45), int(table_w * 0.75)]
-    
-    cv2.putText(table_canvas, "File Name", (col_x[0], row_h - 30), font, font_scale, (0, 0, 0), thick)
-    cv2.putText(table_canvas, "Model 1 (Old)", (col_x[1], row_h - 30), font, font_scale, (0, 0, 0), thick)
-    cv2.putText(table_canvas, "Model 2 (New)", (col_x[2], row_h - 30), font, font_scale, (0, 0, 0), thick)
-    cv2.line(table_canvas, (0, row_h), (table_w, row_h), (0, 0, 0), thick * 2)
-    
-    for i, (fname, i_old, i_new) in enumerate(data_records):
-        y = (i + 2) * row_h
-        cv2.putText(table_canvas, fname, (col_x[0], y - 30), font, font_scale, (0, 0, 0), thick)
-        cv2.putText(table_canvas, f"{i_old:.4f}", (col_x[1], y - 30), font, font_scale, (255, 0, 0), thick)
-        cv2.putText(table_canvas, f"{i_new:.4f}", (col_x[2], y - 30), font, font_scale, (0, 0, 255), thick)
-        cv2.line(table_canvas, (0, y), (table_w, y), (200, 200, 200), thick)
+    scale = 1.0
+    thick = 2
+    col_x = [int(width * 0.04), int(width * 0.58), int(width * 0.78)]
 
-    final_output = np.vstack((grid_canvas, table_canvas))
-    
+    cv2.putText(canvas, "File", (col_x[0], row_h - 16), font, scale, (0, 0, 0), thick)
+    cv2.putText(canvas, "Old IoU", (col_x[1], row_h - 16), font, scale, (0, 0, 0), thick)
+    cv2.putText(canvas, "New IoU", (col_x[2], row_h - 16), font, scale, (0, 0, 0), thick)
+    cv2.line(canvas, (0, row_h), (width, row_h), (0, 0, 0), 3)
+
+    for i, (fname, i_old, i_new) in enumerate(records):
+        y = (i + 2) * row_h
+        cv2.putText(canvas, short_name(fname), (col_x[0], y - 16), font, scale, (0, 0, 0), thick)
+        cv2.putText(canvas, f"{i_old:.4f}", (col_x[1], y - 16), font, scale, (255, 0, 0), thick)
+        cv2.putText(canvas, f"{i_new:.4f}", (col_x[2], y - 16), font, scale, (0, 0, 255), thick)
+        cv2.line(canvas, (0, y), (width, y), (220, 220, 220), 2)
+
+    if records:
+        mean_old = sum(r[1] for r in records) / len(records)
+        mean_new = sum(r[2] for r in records) / len(records)
+        y = (len(records) + 2) * row_h
+        cv2.putText(canvas, f"평균 IoU : 개수={len(records)}", (col_x[0], y - 16), font, scale, (0, 0, 0), 3)
+        cv2.putText(canvas, f"{mean_old:.4f}", (col_x[1], y - 16), font, scale, (255, 0, 0), 3)
+        cv2.putText(canvas, f"{mean_new:.4f}", (col_x[2], y - 16), font, scale, (0, 0, 255), 3)
+
+    return canvas
+
+
+def main():
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    test_dir = os.path.join(TRAINING_DIR, "TestDataset", TEST_DATASET_NAME)
+    image_dir = os.path.join(test_dir, "images", "test")
+    label_dir = os.path.join(test_dir, "labels", "test")
+
+    if not os.path.isdir(image_dir):
+        raise FileNotFoundError(f"테스트 이미지 폴더가 없습니다: {image_dir}")
+    if not os.path.isfile(OLD_MODEL_PATH):
+        raise FileNotFoundError(f"old 모델이 없습니다: {OLD_MODEL_PATH}")
+    if not os.path.isfile(NEW_MODEL_PATH):
+        raise FileNotFoundError(f"new 모델이 없습니다: {NEW_MODEL_PATH}")
+
+    old_model = YOLO(OLD_MODEL_PATH)
+    new_model = YOLO(NEW_MODEL_PATH)
+
+    grid_images = []
+    data_records = []
+
+    file_names = sorted(
+        name for name in os.listdir(image_dir)
+        if name.lower().endswith((".png", ".jpg", ".jpeg"))
+    )
+
+    for file_name in file_names:
+        image_path = os.path.join(image_dir, file_name)
+        txt_path = os.path.join(label_dir, os.path.splitext(file_name)[0] + ".txt")
+        if not os.path.exists(txt_path):
+            continue
+
+        img = imread_unicode(image_path)
+        if img is None:
+            continue
+
+        h, w = img.shape[:2]
+        gt_polygons = load_gt_polygons(txt_path, w, h)
+        mask_gt = mask_from_polygons((h, w), gt_polygons)
+
+        old_results = old_model.predict(img, verbose=False)[0]
+        new_results = new_model.predict(img, verbose=False)[0]
+
+        img_old, mask_old = draw_predictions(img, old_results, (255, 0, 0))
+        img_new, mask_new = draw_predictions(img, new_results, (0, 0, 255))
+        cv2.polylines(img_old, gt_polygons, isClosed=True, color=(0, 255, 0), thickness=2)
+        cv2.polylines(img_new, gt_polygons, isClosed=True, color=(0, 255, 0), thickness=2)
+
+        iou_old = iou(mask_gt, mask_old)
+        iou_new = iou(mask_gt, mask_new)
+
+        old_cell = letterbox(img_old, CELL_W // 2, CELL_H)
+        new_cell = letterbox(img_new, CELL_W // 2, CELL_H)
+        put_label(old_cell, f"Old {iou_old:.3f}", (255, 0, 0))
+        put_label(new_cell, f"New {iou_new:.3f}", (0, 0, 255))
+        cell = np.hstack((old_cell, new_cell))
+        cv2.putText(cell, short_name(file_name), (8, CELL_H - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 2)
+
+        grid_images.append(cell)
+        data_records.append((file_name, iou_old, iou_new))
+
+    if not data_records:
+        raise RuntimeError("평가할 이미지가 없습니다.")
+
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_path = os.path.join(output_dir, f"dashboard_summary_{timestamp}.jpg")
-    
-    result, encoded_img = cv2.imencode('.jpg', final_output)
-    if result:
-        encoded_img.tofile(output_path)
+    table = build_table(data_records, CELL_W * GRID_COLS)
+    legend = build_legend(CELL_W * GRID_COLS)
+    max_grid_h = MAX_JPEG_DIM - table.shape[0] - legend.shape[0] - 8
+    rows_per_page = max(1, max_grid_h // CELL_H)
+    cells_per_page = rows_per_page * GRID_COLS
+
+    for page, start in enumerate(range(0, len(grid_images), cells_per_page), start=1):
+        page_cells = grid_images[start:start + cells_per_page]
+        grid_canvas = build_grid(page_cells, GRID_COLS, CELL_W, CELL_H)
+        final_output = np.vstack((legend, grid_canvas, table))
+        output_path = os.path.join(
+            OUTPUT_DIR,
+            f"dashboard_{TEST_DATASET_NAME}_{timestamp}_p{page}.jpg",
+        )
+        imwrite_unicode(output_path, final_output)
+
+
+if __name__ == "__main__":
+    main()
