@@ -2,18 +2,21 @@ import json
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
-from classification.contour_compare import (
+from classification import contour_compare, xor_compare  # noqa: F401  METRIC 을 바꿔 끼우는 용도
+from classification.compare_pipeline import (
     CATALOG_TEMPLATES,
     extract_shape_code,
     leave_one_out_fingers,
-    nearest_cuticle,
+    nearest_template,
     points_from_labelme,
-    visualize_compare_steps,
-    visualize_full_shell_steps,
+    visualize_steps,
 )
 
 router = APIRouter(prefix="/api")
 DEFAULT_SAMPLES = 160
+
+# 계산 방식설정 => contour_compare / xor_compare 
+METRIC = contour_compare
 
 
 # 업로드 JSON에서 폴리곤 좌표
@@ -27,7 +30,7 @@ async def read_polygon(upload: UploadFile):
 async def classify_label(file: UploadFile = File(...)):
     try:
         query_pts = await read_polygon(file)
-        result = nearest_cuticle(query_pts, CATALOG_TEMPLATES, DEFAULT_SAMPLES)
+        result = nearest_template(query_pts, CATALOG_TEMPLATES, DEFAULT_SAMPLES, "cuticle", METRIC)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:
@@ -47,14 +50,14 @@ async def classify_label(file: UploadFile = File(...)):
 @router.post("/classify-loo")
 async def classify_loo():
     try:
-        return leave_one_out_fingers(DEFAULT_SAMPLES)
+        return leave_one_out_fingers(DEFAULT_SAMPLES, "cuticle", METRIC)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"검증 실패: {exc}") from exc
 
 
-# 큐티클 비교 4단계 그림
+# 큐티클 비교 단계 그림
 @router.post("/classify-viz")
 async def classify_viz(
     green_json: UploadFile = File(...),
@@ -63,7 +66,7 @@ async def classify_viz(
     try:
         green_pts = await read_polygon(green_json)
         red_pts = await read_polygon(red_json)
-        stages = visualize_compare_steps(red_pts, green_pts, DEFAULT_SAMPLES)
+        result = visualize_steps(red_pts, green_pts, DEFAULT_SAMPLES, "cuticle", METRIC)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:
@@ -74,11 +77,12 @@ async def classify_viz(
     return {
         "green_name": green_json.filename or "1번째 JSON",
         "red_name": red_json.filename or "2번째 JSON",
-        "stages": stages,
+        "distance": result["distance"],
+        "stages": result["stages"],
     }
 
 
-# 전체 쉘 비교 3단계 그림
+# 전체 쉘 비교 단계 그림
 @router.post("/classify-viz-shell")
 async def classify_viz_shell(
     green_json: UploadFile = File(...),
@@ -87,7 +91,7 @@ async def classify_viz_shell(
     try:
         green_pts = await read_polygon(green_json)
         red_pts = await read_polygon(red_json)
-        result = visualize_full_shell_steps(red_pts, green_pts, DEFAULT_SAMPLES)
+        result = visualize_steps(red_pts, green_pts, DEFAULT_SAMPLES, "shell", METRIC)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:
