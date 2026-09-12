@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import NailMeasurement from './components/measure';
-import ShapeCompare from './components/classification';
+import ShapeClassify from './components/classification';
 
-type Tab = 'measure' | 'compare';
+type Tab = 'measure' | 'classify';
 
 export default function App() {
   const [tab, setTab] = useState<Tab>('measure');
@@ -31,17 +31,17 @@ export default function App() {
         </button>
         <button
           type="button"
-          onClick={() => setTab('compare')}
+          onClick={() => setTab('classify')}
           style={{
             padding: '8px 16px',
-            fontWeight: tab === 'compare' ? 700 : 400,
+            fontWeight: tab === 'classify' ? 700 : 400,
             cursor: 'pointer',
           }}
         >
-          형태 비교
+          분류
         </button>
       </nav>
-      {tab === 'measure' ? <NailMeasurement /> : <ShapeCompare />}
+      {tab === 'measure' ? <NailMeasurement /> : <ShapeClassify />}
     </div>
   );
 }
