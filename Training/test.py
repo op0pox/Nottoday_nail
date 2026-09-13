@@ -13,11 +13,11 @@ from ultralytics import YOLO
 
 TRAINING_DIR = os.path.dirname(os.path.abspath(__file__))
 
-OLD_MODEL_PATH = os.path.join(TRAINING_DIR, "Train_model", "nail_segmentation_24people", "weights", "best.pt")
-NEW_MODEL_PATH = os.path.join(TRAINING_DIR, "Train_model", "nail_segmentation_croped", "weights", "best.pt")
+OLD_MODEL_PATH = os.path.join(TRAINING_DIR, "Train_model", "nail_segmentation_croped", "weights", "best.pt")
+NEW_MODEL_PATH = os.path.join(TRAINING_DIR, "Train_model", "nail_segmentation_white", "weights", "best.pt")
 
 # TestDataset 하위폴더중 YOLODataset폴더중 선택
-TEST_DATASET_NAME = "YOLODataset_fulldata_online"
+TEST_DATASET_DIR = r"C:\Users\USER\vscode-workspace\Nottoday_nail\Training\TrainDataset\YOLODataset_white"
 
 CELL_W = 960
 CELL_H = 420
@@ -171,7 +171,7 @@ def build_table(records, width):
 def main():
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    test_dir = os.path.join(TRAINING_DIR, "TestDataset", TEST_DATASET_NAME)
+    test_dir = TEST_DATASET_DIR
     image_dir = os.path.join(test_dir, "images", "test")
     label_dir = os.path.join(test_dir, "labels", "test")
 
@@ -244,7 +244,7 @@ def main():
         final_output = np.vstack((legend, grid_canvas, table))
         output_path = os.path.join(
             OUTPUT_DIR,
-            f"dashboard_{TEST_DATASET_NAME}_{timestamp}_p{page}.jpg",
+            f"dashboard_화이트_{timestamp}_p{page}.jpg",
         )
         imwrite_unicode(output_path, final_output)
 

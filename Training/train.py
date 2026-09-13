@@ -9,7 +9,8 @@ if __name__ == '__main__':
     
     # 현재파일 기준으로 경로설정
     target_project = os.path.dirname(os.path.abspath(__file__))
-    data_dir = os.path.join(target_project, "TrainDataset", "YOLODataset_croped", "dataset.yaml")
+    #학습데이터 경로 입력
+    data_dir = os.path.join(target_project, "TrainDataset", "YOLODataset_white", "dataset.yaml")
     
     results = model.train(
         data= data_dir, # yolo데이터의 위치
