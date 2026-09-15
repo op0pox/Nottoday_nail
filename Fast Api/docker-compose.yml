@@ -16,7 +16,7 @@ services:
       - ./server:/app/server
       - ./nail_shape:/app/nail_shape
       - ../Training/Train_model:/app/train_model:ro # 읽기 전용으로 연결
-    restart: always
+    restart: none
 
   front:
     build:
@@ -28,4 +28,4 @@ services:
     volumes:
       - ./front:/app/front
       - /app/front/node_modules
-    restart: always
+    restart: none
