@@ -8,8 +8,8 @@ from PIL import Image, ImageOps
 from ultralytics import YOLO
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ORIGIN_DIR = r"C:\Users\USER\Downloads\022(이태민)"
-TARGET_DIR = os.path.join(SCRIPT_DIR, "..", "Training", "AutoLabel", "022")
+ORIGIN_FOLDER_DIR = os.path.join(SCRIPT_DIR, "..", "Latest_Data", "New체커보드")
+TARGET_FOLDER_DIR = os.path.join(SCRIPT_DIR, "..", "Latest_Data_label")
 MODEL_PATH = os.path.join(
     SCRIPT_DIR,
     "..",
@@ -20,7 +20,7 @@ MODEL_PATH = os.path.join(
     "best.pt",
 )
 
-TARGET_POINTS = 30
+TARGET_POINTS = 60
 CONF = 0.25
 IMGSZ = 1024
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
@@ -109,28 +109,55 @@ def label_one(model, src_path, dst_dir):
     return len(polygons)
 
 
+def is_image_name(name):
+    return os.path.splitext(name)[1].lower() in IMAGE_EXTS
+
+
+def list_images(folder):
+    return sorted(
+        name for name in os.listdir(folder)
+        if is_image_name(name) and os.path.isfile(os.path.join(folder, name))
+    )
+
+
+def iter_image_folders(root):
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        if any(is_image_name(name) for name in filenames):
+            yield dirpath
+
+
+def label_folder(model, src_dir, dst_dir):
+    os.makedirs(dst_dir, exist_ok=True)
+    image_names = list_images(src_dir)
+    rel_dir = os.path.relpath(src_dir, ORIGIN_FOLDER_DIR)
+    print(f"\n[{rel_dir}] 이미지 {len(image_names)}장")
+    for name in image_names:
+        src_path = os.path.join(src_dir, name)
+        n_poly = label_one(model, src_path, dst_dir)
+        print(f"  {name}: nail {n_poly}개")
+    return len(image_names)
+
+
 def main():
-    if not ORIGIN_DIR or not TARGET_DIR or not MODEL_PATH:
-        raise ValueError("ORIGIN_DIR, TARGET_DIR, MODEL_PATH를 지정하세요.")
-    if not os.path.isdir(ORIGIN_DIR):
-        raise FileNotFoundError(f"이미지 폴더가 없습니다: {ORIGIN_DIR}")
+    if not ORIGIN_FOLDER_DIR or not TARGET_FOLDER_DIR or not MODEL_PATH:
+        raise ValueError("ORIGIN_FOLDER_DIR, TARGET_FOLDER_DIR, MODEL_PATH를 지정하세요.")
+    if not os.path.isdir(ORIGIN_FOLDER_DIR):
+        raise FileNotFoundError(f"이미지 폴더가 없습니다: {ORIGIN_FOLDER_DIR}")
     if not os.path.isfile(MODEL_PATH):
         raise FileNotFoundError(f"모델이 없습니다: {MODEL_PATH}")
 
-    os.makedirs(TARGET_DIR, exist_ok=True)
+    image_folders = list(iter_image_folders(ORIGIN_FOLDER_DIR))
+    if not image_folders:
+        raise RuntimeError(f"이미지가 없습니다: {ORIGIN_FOLDER_DIR}")
+
     model = YOLO(MODEL_PATH)
-
-    image_names = sorted(
-        name for name in os.listdir(ORIGIN_DIR)
-        if os.path.splitext(name)[1].lower() in IMAGE_EXTS
-    )
-    if not image_names:
-        raise RuntimeError(f"이미지가 없습니다: {ORIGIN_DIR}")
-
-    for name in image_names:
-        src_path = os.path.join(ORIGIN_DIR, name)
-        n_poly = label_one(model, src_path, TARGET_DIR)
-        print(f"{name}: nail {n_poly}개")
+    total = 0
+    for src_dir in image_folders:
+        rel_dir = os.path.relpath(src_dir, ORIGIN_FOLDER_DIR)
+        dst_dir = os.path.normpath(os.path.join(TARGET_FOLDER_DIR, rel_dir))
+        total += label_folder(model, src_dir, dst_dir)
+    print(f"\n완료: 폴더 {len(image_folders)}개, 이미지 {total}장")
 
 
 if __name__ == "__main__":
