@@ -3,6 +3,7 @@ import React, { useState, useRef } from 'react';
 export default function NailMeasurement() {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [metric, setMetric] = useState<'chamfer' | 'xor'>('chamfer');
   const [measurementResults, setMeasurementResults] = useState<any[] | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [imageSize, setImageSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
@@ -41,6 +42,7 @@ export default function NailMeasurement() {
 
     const formData = new FormData();
     formData.append('file', imageFile);
+    formData.append('metric', metric);
 
     try {
       const response = await fetch('http://localhost:8000/api/measure', {
@@ -80,6 +82,29 @@ export default function NailMeasurement() {
 
       <div style={{ position: 'relative', display: 'inline-block', marginBottom: '20px' }}>
         <input type="file" accept="image/*" onChange={handleFileChange} style={{ marginBottom: '10px', display: 'block' }} />
+
+        <div style={{ display: 'flex', gap: '16px', marginBottom: '12px', fontSize: '14px' }}>
+          <label>
+            <input
+              type="radio"
+              name="metric"
+              value="chamfer"
+              checked={metric === 'chamfer'}
+              onChange={() => setMetric('chamfer')}
+            />
+            {' '}Chamfer
+          </label>
+          <label>
+            <input
+              type="radio"
+              name="metric"
+              value="xor"
+              checked={metric === 'xor'}
+              onChange={() => setMetric('xor')}
+            />
+            {' '}XOR
+          </label>
+        </div>
 
         {imagePreview && (
           <div style={{ position: 'relative', display: 'block', width: 'fit-content', lineHeight: 0 }}>
@@ -153,6 +178,7 @@ export default function NailMeasurement() {
               <li key={index} style={{ margin: '10px 0', padding: '10px', backgroundColor: '#f9f9f9', borderRadius: '4px' }}>
                  길이 {res.length_mm}mm / 폭 {res.width_mm ? `${res.width_mm}mm` : '측정 불가'}
                  {res.shape ? ` / 쉐입 ${res.shape}` : ''}
+                 {res.metric ? ` / ${res.metric === 'xor' ? 'XOR' : 'Chamfer'}` : ''}
                  {res.shape_score != null ? ` (${res.shape_score})` : ''}
               </li>
             ))}

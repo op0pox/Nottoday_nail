@@ -7,6 +7,28 @@ from ultralytics import YOLO
 MODEL_DIR = os.getenv("MODEL_DIR")
 CAMERA_HEIGHT_MM = float(os.getenv("CAMERA_HEIGHT_MM"))
 NAIL_HEIGHT_MM = float(os.getenv("NAIL_HEIGHT_MM"))
+TARGET_POINTS = 100
+IMGSZ = 1024
+
+
+def resample_to_n(pts, n=TARGET_POINTS):
+    pts = np.asarray(pts, dtype=np.float32).reshape(-1, 2)
+    if len(pts) < 3 or n < 3:
+        return pts
+
+    closed = np.vstack([pts, pts[:1]])
+    dist = np.linalg.norm(np.diff(closed, axis=0), axis=1)
+    cum = np.concatenate([[0.0], np.cumsum(dist)])
+    for i in range(1, len(cum)):
+        if cum[i] <= cum[i - 1]:
+            cum[i] = cum[i - 1] + 1e-6
+    if cum[-1] <= 0:
+        return pts
+
+    samples = np.linspace(0.0, cum[-1], n, endpoint=False)
+    xs = np.interp(samples, cum, closed[:, 0])
+    ys = np.interp(samples, cum, closed[:, 1])
+    return np.stack([xs, ys], axis=1)
 
 
 # 픽셀 두 점 사이 거리를 mm로 환산
@@ -25,10 +47,11 @@ def measure_length_mm(homography, point_a, point_b, camera_height_mm=CAMERA_HEIG
 
 # 손톱 한 개의 마스크
 class NailMask:
-    def __init__(self, mask, confidence=1.0, bbox=None):
+    def __init__(self, mask, confidence=1.0, bbox=None, contour=None):
         self.mask = mask
         self.confidence = confidence
         self.bbox = bbox
+        self.contour = contour
 
 
 # YOLO 세그멘테이션으로 손톱 마스크 추출
@@ -45,7 +68,7 @@ class YoloNailBackend:
     # 이미지 한 장 -> NailMask 목록 (신뢰도 상위 5개)
     def segment(self, image_bgr):
         h, w = image_bgr.shape[:2]
-        results = self.model.predict(image_bgr, conf=self.conf, verbose=False)
+        results = self.model.predict(image_bgr, conf=self.conf, imgsz=IMGSZ, verbose=False)
         result = results[0]
 
         if result.masks is None or len(result.masks.xy) == 0:
@@ -56,25 +79,31 @@ class YoloNailBackend:
         candidates = []
 
         for i, seg in enumerate(result.masks.xy):
-            pts = np.asarray(seg, dtype=np.int32).reshape(-1, 1, 2)
+            pts = np.asarray(seg, dtype=np.float32).reshape(-1, 2)
             if len(pts) < 3:
                 continue
+            contour = resample_to_n(pts, TARGET_POINTS)
+            if len(contour) < 3:
+                continue
             binary = np.zeros((h, w), dtype=np.uint8)
-            cv2.fillPoly(binary, [pts], 255)
+            fill_pts = np.round(contour).astype(np.int32).reshape(-1, 1, 2)
+            cv2.fillPoly(binary, [fill_pts], 255)
             # 화면 대비 너무 작은 조각은 손톱이 아니라고 보고 버린다
             area = int(np.count_nonzero(binary))
             if area < min_area:
                 continue
-            candidates.append((binary, float(confs[i]), area))
+            candidates.append((binary, float(confs[i]), area, contour))
 
         if len(candidates) > 5:
             candidates.sort(key=lambda c: c[1], reverse=True)
             candidates = candidates[:5]
 
         nail_masks = []
-        for binary, conf, _area in candidates:
+        for binary, conf, _area, contour in candidates:
             x, y, bw, bh = cv2.boundingRect(binary)
-            nail_masks.append(NailMask(mask=binary, confidence=conf, bbox=(x, y, bw, bh)))
+            nail_masks.append(
+                NailMask(mask=binary, confidence=conf, bbox=(x, y, bw, bh), contour=contour)
+            )
         return nail_masks
 
 

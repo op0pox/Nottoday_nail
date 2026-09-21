@@ -2,12 +2,17 @@ import os
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from typing import List, Optional, Tuple
 
+from classification import contour_compare, xor_compare
+from classification.compare_pipeline import (
+    CATALOG_TEMPLATES,
+    extract_shape_code,
+    nearest_template,
+)
 from segmentation.nail_segmentation import YoloNailBackend, measure_nail_from_mask
-from classification.nail_classification import classify_nail_shape
 
 SQUARES_X = int(os.getenv("SQUARES_X"))
 SQUARES_Y = int(os.getenv("SQUARES_Y"))
@@ -17,6 +22,11 @@ CAMERA_HEIGHT_MM = float(os.getenv("CAMERA_HEIGHT_MM"))
 NAIL_HEIGHT_MM = float(os.getenv("NAIL_HEIGHT_MM"))
 
 router = APIRouter(prefix="/api")
+DEFAULT_SAMPLES = 160
+COMPARE_METRICS = {
+    "chamfer": contour_compare,
+    "xor": xor_compare,
+}
 
 backend = YoloNailBackend(conf=0.25)
 aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_250)
@@ -33,22 +43,22 @@ detector_params.minMarkerPerimeterRate = 0.02
 detector = cv2.aruco.CharucoDetector(board, charuco_params, detector_params)
 
 
-# 마스크 외곽선을 [[x, y], ...] 목록으로
-def format_contours(mask):
-    display_contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+def format_contour(contour):
+    if contour is None or len(contour) < 3:
+        return []
+    return [[float(x), float(y)] for x, y in np.asarray(contour, dtype=np.float32).reshape(-1, 2)]
 
-    formatted = []
-    for cnt in display_contours:
-        if cnt is None or len(cnt) == 0:
-            continue
-        cnt_list = cnt.squeeze().tolist()
-        if not cnt_list:
-            continue
-        # 점이 하나면 squeeze가 [x, y]로 납작해지므로 다시 감싼다
-        if not isinstance(cnt_list[0], list):
-            cnt_list = [cnt_list]
-        formatted.append(cnt_list)
-    return formatted
+
+def classify_contour(contour, metric_name):
+    metric = COMPARE_METRICS[metric_name]
+    result = nearest_template(
+        np.asarray(contour, dtype=np.float32).reshape(-1, 2),
+        CATALOG_TEMPLATES,
+        DEFAULT_SAMPLES,
+        "cuticle",
+        metric,
+    )
+    return extract_shape_code(result["predicted_shape"]), float(result["distance"])
 
 
 # 손톱 한 개의 측정 결과
@@ -57,14 +67,19 @@ class MeasurementResult(BaseModel):
     width_mm: Optional[float] = None
     shape: Optional[str] = None
     shape_score: Optional[float] = None
-    contours: Optional[List[List[Tuple[int, int]]]] = None
+    metric: Optional[str] = None
+    contours: Optional[List[List[Tuple[float, float]]]] = None
 
 
 # 사진 한 장에서 손톱 길이·폭·형태 측정
 @router.post("/measure", response_model=List[MeasurementResult])
 async def measure_nails(
     file: UploadFile = File(...),
+    metric: str = Form("chamfer"),
 ):
+    metric_name = (metric or "chamfer").strip().lower()
+    if metric_name not in COMPARE_METRICS:
+        raise HTTPException(status_code=400, detail="metric은 chamfer 또는 xor 이어야 합니다.")
     contents = await file.read()
     nparr = np.frombuffer(contents, np.uint8)
     image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -104,16 +119,17 @@ async def measure_nails(
 
     results = []
     for nail_mask in nail_masks:
-        contours, _ = cv2.findContours(nail_mask.mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-
         best_shape = None
         min_dist = None
         formatted_contours = []
 
-        if contours:
-            main_contour = max(contours, key=cv2.contourArea)
-            best_shape, min_dist = classify_nail_shape(main_contour)
-            formatted_contours = format_contours(nail_mask.mask)
+        if nail_mask.contour is not None and len(nail_mask.contour) >= 3:
+            formatted_contours = [format_contour(nail_mask.contour)]
+            try:
+                best_shape, min_dist = classify_contour(nail_mask.contour, metric_name)
+            except ValueError:
+                best_shape = None
+                min_dist = None
 
         measured = measure_nail_from_mask(
             nail_mask.mask,
@@ -127,8 +143,9 @@ async def measure_nails(
                 length_mm=round(measured["length_mm"], 2),
                 width_mm=round(measured["width_mm"], 2) if measured.get("width_mm") is not None else None,
                 shape=best_shape,
-                shape_score=round(min_dist, 4) if min_dist else None,
-                contours=formatted_contours
+                shape_score=round(min_dist, 4) if min_dist is not None else None,
+                metric=metric_name,
+                contours=formatted_contours,
             ))
 
     return results
