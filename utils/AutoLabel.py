@@ -8,46 +8,42 @@ from PIL import Image, ImageOps
 from ultralytics import YOLO
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ORIGIN_FOLDER_DIR = os.path.join(SCRIPT_DIR, "..", "Latest_Data", "New체커보드")
-TARGET_FOLDER_DIR = os.path.join(SCRIPT_DIR, "..", "Latest_Data_label")
+ORIGIN_FOLDER_DIR = r"C:\Users\USER\vscode-workspace\Nottoday_nail\Latest_Data\New체커보드"
+TARGET_FOLDER_DIR = r"C:\Users\USER\vscode-workspace\Nottoday_nail\Latest_Data_label"
 MODEL_PATH = os.path.join(
     SCRIPT_DIR,
     "..",
     "Training",
     "Train_model",
-    "nail_segmentation_24people",
+    "nail_segmentation_33people",
     "weights",
     "best.pt",
 )
 
-TARGET_POINTS = 60
+TARGET_POINTS =100
 CONF = 0.25
 IMGSZ = 1024
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 
-def simplify_to_n(pts, n=TARGET_POINTS):
+def resample_to_n(pts, n=TARGET_POINTS):
     pts = np.asarray(pts, dtype=np.float32).reshape(-1, 2)
-    if len(pts) <= n:
+    if len(pts) < 3 or n < 3:
         return pts.tolist()
 
-    contour = pts.reshape(-1, 1, 2)
-    peri = cv2.arcLength(contour, True)
-    if peri <= 0:
+    closed = np.vstack([pts, pts[:1]])
+    dist = np.linalg.norm(np.diff(closed, axis=0), axis=1)
+    cum = np.concatenate([[0.0], np.cumsum(dist)])
+    for i in range(1, len(cum)):
+        if cum[i] <= cum[i - 1]:
+            cum[i] = cum[i - 1] + 1e-6
+    if cum[-1] <= 0:
         return pts.tolist()
 
-    lo, hi = 1e-4, 0.2
-    best = pts
-    for _ in range(25):
-        mid = (lo + hi) / 2
-        approx = cv2.approxPolyDP(contour, mid * peri, True).reshape(-1, 2)
-        if len(approx) >= 3:
-            best = approx
-        if len(approx) > n:
-            lo = mid
-        else:
-            hi = mid
-    return best.reshape(-1, 2).tolist()
+    samples = np.linspace(0.0, cum[-1], n, endpoint=False)
+    xs = np.interp(samples, cum, closed[:, 0])
+    ys = np.interp(samples, cum, closed[:, 1])
+    return np.stack([xs, ys], axis=1).tolist()
 
 
 def make_shape(points):
@@ -98,7 +94,7 @@ def label_one(model, src_path, dst_dir):
             pts = np.asarray(seg, dtype=np.float32).reshape(-1, 2)
             if len(pts) < 3:
                 continue
-            polygons.append(simplify_to_n(pts, TARGET_POINTS))
+            polygons.append(resample_to_n(pts, TARGET_POINTS))
 
     json_name = os.path.splitext(file_name)[0] + ".json"
     json_path = os.path.join(dst_dir, json_name)
