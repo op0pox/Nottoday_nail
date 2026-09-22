@@ -12,14 +12,14 @@ from classification.compare_pipeline import (
     extract_shape_code,
     nearest_template,
 )
-from segmentation.nail_segmentation import YoloNailBackend, measure_nail_from_mask
+from segmentation.nail_segmentation import YoloNailBackend  # measure_nail_from_mask
 
 SQUARES_X = int(os.getenv("SQUARES_X"))
 SQUARES_Y = int(os.getenv("SQUARES_Y"))
 SQUARE_MM = float(os.getenv("SQUARE_MM"))
 MARKER_MM = float(os.getenv("MARKER_MM"))
-CAMERA_HEIGHT_MM = float(os.getenv("CAMERA_HEIGHT_MM"))
-NAIL_HEIGHT_MM = float(os.getenv("NAIL_HEIGHT_MM"))
+# CAMERA_HEIGHT_MM = float(os.getenv("CAMERA_HEIGHT_MM"))
+# NAIL_HEIGHT_MM = float(os.getenv("NAIL_HEIGHT_MM"))
 
 router = APIRouter(prefix="/api")
 DEFAULT_SAMPLES = 160
@@ -63,7 +63,7 @@ def classify_contour(contour, metric_name):
 
 # 손톱 한 개의 측정 결과
 class MeasurementResult(BaseModel):
-    length_mm: float
+    length_mm: Optional[float] = None
     width_mm: Optional[float] = None
     shape: Optional[str] = None
     shape_score: Optional[float] = None
@@ -87,31 +87,32 @@ async def measure_nails(
     if image is None:
         raise HTTPException(status_code=400, detail="Invalid image")
 
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    charuco_corners, charuco_ids, _, _ = detector.detectBoard(gray)
-    if charuco_corners is None or charuco_ids is None or len(charuco_corners) < 4:
-        # 코너가 모자라면 국소 대비를 올려 한 번 더 시도한다
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        charuco_corners, charuco_ids = detector.detectBoard(clahe.apply(gray))[:2]
-
-    if charuco_corners is None or charuco_ids is None or len(charuco_corners) < 4:
-        raise HTTPException(status_code=400, detail="ChArUco failed")
-
-    # 코너 ID는 (SQUARES_X-1)열 격자를 행 우선으로 센 번호라, 몫·나머지로 격자 위치를 되돌린다
-    cols = SQUARES_X - 1
-    image_points = charuco_corners.reshape(-1, 2).astype(np.float32)
-    mm_points = np.array(
-        [
-            ((int(cid) % cols + 1) * SQUARE_MM, (int(cid) // cols + 1) * SQUARE_MM)
-            for cid in charuco_ids.flatten()
-        ],
-        dtype=np.float32,
-    )
-
-    # 픽셀 좌표를 보드 평면의 mm 좌표로 옮기는 행렬
-    H, _ = cv2.findHomography(image_points, mm_points, cv2.RANSAC, 2.0)
-    if H is None:
-        raise HTTPException(status_code=400, detail="Homography failed")
+    # 실측(mm)은 잠시 끈다. seg와 형태 분류만 수행한다.
+    # gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    # charuco_corners, charuco_ids, _, _ = detector.detectBoard(gray)
+    # if charuco_corners is None or charuco_ids is None or len(charuco_corners) < 4:
+    #     # 코너가 모자라면 국소 대비를 올려 한 번 더 시도한다
+    #     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    #     charuco_corners, charuco_ids = detector.detectBoard(clahe.apply(gray))[:2]
+    #
+    # if charuco_corners is None or charuco_ids is None or len(charuco_corners) < 4:
+    #     raise HTTPException(status_code=400, detail="ChArUco failed")
+    #
+    # # 코너 ID는 (SQUARES_X-1)열 격자를 행 우선으로 센 번호라, 몫·나머지로 격자 위치를 되돌린다
+    # cols = SQUARES_X - 1
+    # image_points = charuco_corners.reshape(-1, 2).astype(np.float32)
+    # mm_points = np.array(
+    #     [
+    #         ((int(cid) % cols + 1) * SQUARE_MM, (int(cid) // cols + 1) * SQUARE_MM)
+    #         for cid in charuco_ids.flatten()
+    #     ],
+    #     dtype=np.float32,
+    # )
+    #
+    # # 픽셀 좌표를 보드 평면의 mm 좌표로 옮기는 행렬
+    # H, _ = cv2.findHomography(image_points, mm_points, cv2.RANSAC, 2.0)
+    # if H is None:
+    #     raise HTTPException(status_code=400, detail="Homography failed")
 
     nail_masks = backend.segment(image)
     if not nail_masks:
@@ -131,21 +132,18 @@ async def measure_nails(
                 best_shape = None
                 min_dist = None
 
-        measured = measure_nail_from_mask(
-            nail_mask.mask,
-            H,
-            camera_height_mm=CAMERA_HEIGHT_MM,
-            nail_height_mm=NAIL_HEIGHT_MM,
-        )
+        # measured = measure_nail_from_mask(
+        #     nail_mask.mask,
+        #     H,
+        #     camera_height_mm=CAMERA_HEIGHT_MM,
+        #     nail_height_mm=NAIL_HEIGHT_MM,
+        # )
 
-        if measured:
-            results.append(MeasurementResult(
-                length_mm=round(measured["length_mm"], 2),
-                width_mm=round(measured["width_mm"], 2) if measured.get("width_mm") is not None else None,
-                shape=best_shape,
-                shape_score=round(min_dist, 4) if min_dist is not None else None,
-                metric=metric_name,
-                contours=formatted_contours,
-            ))
+        results.append(MeasurementResult(
+            shape=best_shape,
+            shape_score=round(min_dist, 4) if min_dist is not None else None,
+            metric=metric_name,
+            contours=formatted_contours,
+        ))
 
     return results

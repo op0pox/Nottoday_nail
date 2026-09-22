@@ -8,14 +8,14 @@ from PIL import Image, ImageOps
 from ultralytics import YOLO
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ORIGIN_FOLDER_DIR = r"C:\Users\USER\vscode-workspace\Nottoday_nail\Latest_Data\New체커보드"
-TARGET_FOLDER_DIR = r"C:\Users\USER\vscode-workspace\Nottoday_nail\Latest_Data_label"
+ORIGIN_FOLDER_DIR = r"C:\Users\jehee\Downloads\정답지라벨"
+TARGET_FOLDER_DIR = r"C:\Users\jehee\Downloads\정답지라벨_오토"
 MODEL_PATH = os.path.join(
     SCRIPT_DIR,
     "..",
     "Training",
     "Train_model",
-    "nail_segmentation_33people",
+    "nail_segmentation_white_20260914",
     "weights",
     "best.pt",
 )
