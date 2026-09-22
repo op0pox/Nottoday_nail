@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 
-const JETSON_URL = import.meta.env.VITE_JETSON_URL || 'http://192.168.55.1:8080';
+const JETSON_URL = import.meta.env.VITE_JETSON_URL;
 
 type MeasureResult = {
   length_mm?: number;

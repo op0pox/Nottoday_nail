@@ -8,14 +8,14 @@ services:
     container_name: server
     env_file:
       - .env
-    environment:
-      MODEL_DIR: /app/train_model/nail_segmentation_33people/weights/last.pt
     ports:
       - "8000:8000"
     volumes:
       - ./server:/app/server
       - ./nail_shape:/app/nail_shape
-      - ../Training/Train_model:/app/train_model:ro # 읽기 전용으로 연결
+      - ${MODEL_DIR}:/app/model.pt:ro # env에 적혀있는 모델파일을 읽기전용으로 연결
+    environment:
+      MODEL_DIR: /app/model.pt # 위 모델볼륨의 위치
     restart: none
 
   front:
@@ -24,7 +24,7 @@ services:
       dockerfile: dockerfiles/Dockerfile.front
     container_name: front
     environment:
-      VITE_JETSON_URL: http://192.168.55.1:8080
+      VITE_JETSON_URL: ${VITE_JETSON_URL}
     ports:
       - "5173:5173"
     volumes:
