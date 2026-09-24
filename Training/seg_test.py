@@ -24,7 +24,7 @@ CELL_H = 420
 GRID_COLS = 2
 MAX_JPEG_DIM = 65000
 
-OUTPUT_DIR = os.path.join(TRAINING_DIR, "results")
+OUTPUT_DIR = os.path.join(TRAINING_DIR, "seg_results")
 
 
 def imread_unicode(path):

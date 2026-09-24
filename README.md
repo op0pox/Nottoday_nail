@@ -46,16 +46,17 @@ Nottoday_nail/
 | 경로 | 역할 |
 |---|---|
 | `seg_train.py` | HuggingFace 사전학습 모델로 YOLO 세그 학습. 기본 데이터는 `TrainDataset/YOLODataset_white` |
-| `seg_test.py` | 두 세그 모델 예측을 GT와 나란히 비교해 `results/`에 저장 |
-| `cls_train.py` | `yolov8s-cls`로 P/S 분류 학습. 데이터는 `Gray_Train_Data/ClassifyPrep/{front,side}/{thumb,other}` |
-| `cls_test.py` | 분류 val 정확도와 오분류 이미지를 `results/`에 저장 |
+| `seg_test.py` | 두 세그 모델 예측을 GT와 나란히 비교해 `seg_results/`에 저장 |
+| `cls_train.py` | 정면+측면 2-view로 P/S 분류. 앞단에서 80/20 분할 후 thumb/other를 따로 학습하고, 이어서 hold-out 테스트를 돌림. 산출물은 `cls_results/시각/` |
+| `cls_test.py` | `cls_results/시각/` 의 hold-out으로 지표 CSV·비교 이미지 저장. 학습 스크립트가 끝나면 자동 호출됨 |
 | `Train_model/` | 실험별 가중치. 예: `nail_segmentation_33people/weights/best.pt` |
 | `TrainDataset/` | YOLO yaml 학습셋 |
 | `RawDataset/` | 체커보드 원본 풀 |
 | `TestDataset/` | 테스트 분할 |
 | `CropedDataset/`, `Crop+White/` | 크롭·흰 배경 전처리본 |
 | `AutoLabel/` | 예전 오토라벨 출력 |
-| `results/` | `seg_test.py` / `cls_test.py` 비교 이미지 |
+| `seg_results/` | `seg_test.py` 비교 이미지 |
+| `cls_results/` | 분류 실험. `{YYYYMMDD_HHMMSS}/` 아래 가중치·분할·테스트 시각화 |
 
 현재 오토라벨 기본 모델은 `Train_model/nail_segmentation_33people`입니다.
 
@@ -78,6 +79,13 @@ Nottoday_nail/
 
 - 입력: `Latest_Data/New체커보드/{사람}/`
 - 출력: `Latest_Data_label/{사람}/` 이미지 + `.json`
+
+분류 실험 폴더 (`Training/cls_results/{YYYYMMDD_HHMMSS}/`):
+
+- `split.csv` — 어떤 샘플이 train/test 인지
+- `thumb/`, `other/` — `final_model.pt`, 교차검증 json/csv
+- `test/` — hold-out 지표·예측 CSV·비교 이미지
+- `20260925_full/` — 전체 데이터로 먼저 돌려 본 참고 모델 (hold-out 없음)
 
 ---
 
