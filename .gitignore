@@ -20,6 +20,11 @@ Training/Train_model/nail_segmentation*/*
 !Training/Train_model/nail_segmentation*/weights/
 !Training/Train_model/nail_segmentation*/weights/*.pt
 
+!Training/Train_model/nail_classification*/
+Training/Train_model/nail_classification*/*
+!Training/Train_model/nail_classification*/weights/
+!Training/Train_model/nail_classification*/weights/*.pt
+
 # 손톱모양 crop데이터 외 나머지 제거
 Fast Api/nail_shape/*
 !Fast Api/nail_shape/fingers/
@@ -27,8 +32,10 @@ Fast Api/nail_shape/*
 !Fast Api/nail_shape/shapes.json
 
 # 학습코드 제외(내 집컴에서만 학습가능)
-!Training/train.py
-!Training/test.py
+!Training/seg_train.py
+!Training/seg_test.py
+!Training/cls_train.py
+!Training/cls_test.py
 
 # 엑셀파일 제외
 손톱데이터셋목록.xlsx
