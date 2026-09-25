@@ -71,6 +71,7 @@ Nottoday_nail/
 | `AutoLabel.py` | 폴더를 재귀 탐색해 YOLO 세그 → LabelMe json. 윤곽은 둘레 기준 `TARGET_POINTS`개로 균등 배치 |
 | `ConvertToJpg.py` | 원본은 두고 `{폴더명}_to_jpg`에 jpg 복사. heic·확장자 없는 이미지도 변환 |
 | `CheckData.py` | 사람별 데이터 유무 GUI. `data/dataset_original.csv` / `dataset_dev.csv` |
+| `ReviewImage.py` | 폴더의 이미지와 같은 이름 json을 보면서 회전·파일명 변경. 좌표도 같이 저장 |
 | `Crop_image.py` | 라벨 박스 기준 손톱 크롭 |
 | `Trans_json.py` | LabelMe json의 `imagePath` / 해상도 정리 |
 | `data/` | 수집 현황 CSV (순번, 이름, 체커보드 정면/측면, 흰색배경, 3D) |
@@ -79,6 +80,13 @@ Nottoday_nail/
 
 - 입력: `Latest_Data/New체커보드/{사람}/`
 - 출력: `Latest_Data_label/{사람}/` 이미지 + `.json`
+
+이미지·json 확인 (`python utils/ReviewImage.py`):
+
+- 경로를 입력하거나 찾아보기로 폴더를 연다. 같은 이름의 이미지와 LabelMe json을 같이 보여 준다
+- 왼쪽 90° / 오른쪽 90° / 180°는 이미지를 돌리고, json 점 좌표와 가로·세로도 같이 저장한다
+- 이름 변경은 이미지와 json 파일명을 같이 바꾸고, json의 `imagePath`도 맞춘다
+- 그 폴더에 바로 덮어쓴다. 짝이 없으면 있는 파일만 바꾼다
 
 분류 실험 폴더 (`Training/cls_results/{YYYYMMDD_HHMMSS}/`):
 
