@@ -47,8 +47,8 @@ Nottoday_nail/
 |---|---|
 | `seg_train.py` | HuggingFace 사전학습 모델로 YOLO 세그 학습. 기본 데이터는 `TrainDataset/YOLODataset_white` |
 | `seg_test.py` | 두 세그 모델 예측을 GT와 나란히 비교해 `seg_results/`에 저장 |
-| `cls_train.py` | 정면+측면 2-view로 P/S 분류. 앞단에서 80/20 분할 후 thumb/other를 따로 학습하고, 이어서 hold-out 테스트를 돌림. 산출물은 `cls_results/시각/` |
-| `cls_test.py` | `cls_results/시각/` 의 hold-out으로 지표 CSV·비교 이미지 저장. 학습 스크립트가 끝나면 자동 호출됨 |
+| `cls_train.py` | 정면+측면 2-view로 P/S 분류. 데이터 폴더 하나만 넣으면 80/20을 나누고 thumb/other를 따로 학습한 뒤 테스트까지 저장 |
+| `cls_test.py` | 방금 학습 폴더의 hold-out으로 지표 CSV와 비교 이미지를 다시 만듦. `cls_train.py`가 끝나면 자동으로 호출 |
 | `Train_model/` | 실험별 가중치. 예: `nail_segmentation_33people/weights/best.pt` |
 | `TrainDataset/` | YOLO yaml 학습셋 |
 | `RawDataset/` | 체커보드 원본 풀 |
@@ -60,40 +60,58 @@ Nottoday_nail/
 
 현재 오토라벨 기본 모델은 `Train_model/nail_segmentation_33people`입니다.
 
+### 분류 실험 결과
+
+`python Training/cls_train.py` 한 번이면 손가락 쌍 기준 80/20 분할, thumb/other 따로 학습, hold-out 테스트까지 이어집니다. 결과는 `Training/cls_results/{YYYYMMDD_HHMMSS}/`에 새로 생깁니다.
+
+- `split.csv` — 어떤 손가락 쌍이 학습인지, 테스트인지
+- `thumb/`, `other/` — `final_model.pt`, 교차검증 json/csv
+- `test/` — 학습에 넣지 않은 데이터로 본 지표, 예측 CSV, 비교 이미지
+- `20260925_full/` — 전체를 학습에 넣고 먼저 돌려 본 참고 모델
+
 ---
 
 ## utils/
 
-데이터 작업을 위한 스크립트입니다. 경로는 각 파일 상단 `ORIGIN_*` / `TARGET_*`를 바꿔 실행합니다.
+촬영본을 라벨링하고, 이름을 고치고, 수집 현황을 보는 스크립트입니다. 배치 스크립트는 파일 상단의 `ORIGIN_*` / `TARGET_*` 경로를 바꾼 뒤 실행합니다.
 
-| 파일 | 역할 |
-|---|---|
-| `AutoLabel.py` | 폴더를 재귀 탐색해 YOLO 세그 → LabelMe json. 윤곽은 둘레 기준 `TARGET_POINTS`개로 균등 배치 |
-| `ConvertToJpg.py` | 원본은 두고 `{폴더명}_to_jpg`에 jpg 복사. heic·확장자 없는 이미지도 변환 |
-| `CheckData.py` | 사람별 데이터 유무 GUI. `data/dataset_original.csv` / `dataset_dev.csv` |
-| `ReviewImage.py` | 폴더의 이미지와 같은 이름 json을 보면서 회전·파일명 변경. 좌표도 같이 저장 |
-| `Crop_image.py` | 라벨 박스 기준 손톱 크롭 |
-| `Trans_json.py` | LabelMe json의 `imagePath` / 해상도 정리 |
-| `data/` | 수집 현황 CSV (순번, 이름, 체커보드 정면/측면, 흰색배경, 3D) |
+| 파일 | 누가 쓰나 | 하는 일 |
+|---|---|---|
+| `AutoLabel.py` | 라벨 작업 | 하위 폴더까지 찾아 YOLO 세그 → LabelMe json. 윤곽은 둘레를 `TARGET_POINTS`개로 균등 배치 |
+| `ReviewImage.py` | 라벨 확인 | 한 폴더의 이미지와 같은 이름 json을 보면서 회전·이름 변경 |
+| `ConvertToJpg.py` | 정리 | 원본은 두고 `{폴더명}_to_jpg`에 jpg 복사. heic·확장자 없는 이미지도 변환 |
+| `CheckData.py` | 수집 확인 | 사람별 데이터 유무 GUI. `data/dataset_original.csv` / `dataset_dev.csv` |
+| `Crop_image.py` | 전처리 | 라벨 박스 기준 손톱 크롭 |
+| `Trans_json.py` | 전처리 | LabelMe json의 `imagePath`와 해상도를 이미지에 맞춤 |
+| `data/` | 수집 확인 | 순번, 이름, 체커보드 정면/측면, 흰색배경, 3D 유무 CSV |
 
-오토라벨 입력/출력 예:
+### 오토라벨
 
 - 입력: `Latest_Data/New체커보드/{사람}/`
-- 출력: `Latest_Data_label/{사람}/` 이미지 + `.json`
+- 출력: `Latest_Data_label/{사람}/` 이미지 + 같은 이름의 `.json`
+- 원본 폴더는 수정하지 않습니다.
 
-이미지·json 확인 (`python utils/ReviewImage.py`):
+### 이미지와 json 확인
 
-- 경로를 입력하거나 찾아보기로 폴더를 연다. 같은 이름의 이미지와 LabelMe json을 같이 보여 준다
-- 왼쪽 90° / 오른쪽 90° / 180°는 이미지를 돌리고, json 점 좌표와 가로·세로도 같이 저장한다
-- 이름 변경은 이미지와 json 파일명을 같이 바꾸고, json의 `imagePath`도 맞춘다
-- 그 폴더에 바로 덮어쓴다. 짝이 없으면 있는 파일만 바꾼다
+```powershell
+python utils/ReviewImage.py
+```
 
-분류 실험 폴더 (`Training/cls_results/{YYYYMMDD_HHMMSS}/`):
+연 폴더 **바로 안**의 파일만 봅니다. 하위 폴더는 들어가지 않으므로, 사람 폴더를 직접 선택합니다. 같은 이름인 `사진.jpg`와 `사진.json`을 한 쌍으로 묶습니다. json은 LabelMe 형식입니다. `shapes[].points`가 다각형이고, `imageWidth` / `imageHeight`가 그 점의 기준 크기입니다.
 
-- `split.csv` — 어떤 샘플이 train/test 인지
-- `thumb/`, `other/` — `final_model.pt`, 교차검증 json/csv
-- `test/` — hold-out 지표·예측 CSV·비교 이미지
-- `20260925_full/` — 전체 데이터로 먼저 돌려 본 참고 모델 (hold-out 없음)
+화면에는 사진 위에 그 다각형과 라벨 글자를 같이 그립니다. LabelMe에서 보는 윤곽과 같은 위치인지 여기서 확인할 수 있습니다.
+
+회전은 세 가지 중 하나를 고릅니다. 기본은 **둘 다**입니다.
+
+| 선택 | 저장되는 것 |
+|---|---|
+| 둘 다 | 사진 픽셀과 json 점을 같은 방향으로 돌립니다. 가로·세로 크기도 json에 다시 적습니다. |
+| 이미지만 | 사진만 돌립니다. 점은 그대로입니다. |
+| json만 | 점과 json에 적힌 가로·세로만 바꿉니다. 사진 파일은 그대로입니다. |
+
+왼쪽 90° / 오른쪽 90° / 180° 모두 위 선택을 따릅니다. 이름 변경은 사진과 json 파일명을 같이 바꾸고, json의 `imagePath`를 새 사진 이름으로 고칩니다.
+
+저장은 그 폴더에 바로 덮어씁니다. 되돌리는 복사본은 만들지 않습니다. 짝이 없는 파일은 있는 쪽만 바꿉니다. 이미 켜 둔 LabelMe는 파일을 자동으로 다시 읽지 않으므로, 저장 뒤에 LabelMe에서 그 파일을 다시 열어야 합니다.
 
 ---
 
