@@ -26,10 +26,10 @@ FONT_SMALL = ("맑은 고딕", 11)
 
 def rotate_xy(x, y, width, height, turn):
     if turn == "cw":
-        return height - 1 - y, x
+        return float(height - 1 - y), float(x)
     if turn == "ccw":
-        return y, width - 1 - x
-    return width - 1 - x, height - 1 - y
+        return float(y), float(width - 1 - x)
+    return float(width - 1 - x), float(height - 1 - y)
 
 
 def rotate_image(image, turn):
@@ -41,20 +41,25 @@ def rotate_image(image, turn):
 
 
 def rotate_json(data, width, height, turn):
+    changed = 0
     for shape in data.get("shapes") or []:
         points = shape.get("points") or []
-        shape["points"] = [
-            [float(nx), float(ny)]
-            for x, y in points
-            for nx, ny in [rotate_xy(float(x), float(y), width, height, turn)]
-        ]
+        moved = []
+        for point in points:
+            if not isinstance(point, (list, tuple)) or len(point) < 2:
+                continue
+            moved.append(list(rotate_xy(float(point[0]), float(point[1]), width, height, turn)))
+        if moved:
+            shape["points"] = moved
+            changed += len(moved)
     if turn == "180":
-        data["imageWidth"] = width
-        data["imageHeight"] = height
+        data["imageWidth"] = int(width)
+        data["imageHeight"] = int(height)
     else:
-        data["imageWidth"] = height
-        data["imageHeight"] = width
+        data["imageWidth"] = int(height)
+        data["imageHeight"] = int(width)
     data["imageData"] = None
+    return changed
 
 
 def save_image(image, path):
@@ -139,15 +144,24 @@ class ReviewApp:
         self.info.pack(fill="x", pady=(8, 0))
 
         tools = tk.Frame(self.root, bg=BG)
-        tools.pack(fill="x", padx=16, pady=(0, 16))
-        self._button(tools, "왼쪽 90°", lambda: self.rotate("ccw")).pack(side="left")
+        tools.pack(fill="x", padx=16, pady=(0, 8))
+        self.rotate_target = tk.StringVar(value="both")
+        for value, text in (("both", "둘 다"), ("image", "이미지만"), ("json", "json만")):
+            tk.Radiobutton(
+                tools, text=text, value=value, variable=self.rotate_target,
+                font=FONT, bg=BG, fg=TEXT, selectcolor=BG, activebackground=BG,
+            ).pack(side="left", padx=(0, 8))
+        self._button(tools, "왼쪽 90°", lambda: self.rotate("ccw")).pack(side="left", padx=(12, 0))
         self._button(tools, "오른쪽 90°", lambda: self.rotate("cw")).pack(side="left", padx=8)
         self._button(tools, "180°", lambda: self.rotate("180")).pack(side="left")
-        tk.Label(tools, text="이름", font=FONT, bg=BG).pack(side="left", padx=(20, 6))
+
+        names = tk.Frame(self.root, bg=BG)
+        names.pack(fill="x", padx=16, pady=(0, 16))
+        tk.Label(names, text="이름", font=FONT, bg=BG).pack(side="left", padx=(0, 6))
         self.name_var = tk.StringVar()
-        tk.Entry(tools, textvariable=self.name_var, font=FONT, width=28).pack(side="left", ipady=4)
-        self._button(tools, "이름 변경", self.rename).pack(side="left", padx=8)
-        self.status = tk.Label(tools, text="", font=FONT_SMALL, bg=BG, fg=MUTED)
+        tk.Entry(names, textvariable=self.name_var, font=FONT, width=28).pack(side="left", ipady=4)
+        self._button(names, "이름 변경", self.rename).pack(side="left", padx=8)
+        self.status = tk.Label(names, text="", font=FONT_SMALL, bg=BG, fg=MUTED)
         self.status.pack(side="left", padx=8)
 
     def _button(self, parent, text, command):
@@ -230,20 +244,15 @@ class ReviewApp:
         stem, image_path, json_path = item
         self.name_var.set(stem)
         notes = [stem]
-        if image_path and os.path.isfile(image_path):
-            image = Image.open(image_path).convert("RGB")
-            notes.append("%dx%d" % image.size)
-            self._draw(image)
-        else:
-            self.canvas.delete("all")
-            self.canvas.create_text(20, 20, anchor="nw", fill="white", text="이미지 없음", font=FONT)
+        shapes = []
         if json_path and os.path.isfile(json_path):
             try:
                 data = json.load(open(json_path, encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 notes.append("json 읽기 실패")
             else:
-                labels = [shape.get("label") or "?" for shape in data.get("shapes") or []]
+                shapes = data.get("shapes") or []
+                labels = [shape.get("label") or "?" for shape in shapes]
                 notes.append("json %d개" % len(labels))
                 if labels:
                     shown = ", ".join(labels[:8])
@@ -252,9 +261,16 @@ class ReviewApp:
                     notes.append(shown)
         else:
             notes.append("json 없음")
+        if image_path and os.path.isfile(image_path):
+            image = Image.open(image_path).convert("RGB")
+            notes.append("%dx%d" % image.size)
+            self._draw(image, shapes)
+        else:
+            self.canvas.delete("all")
+            self.canvas.create_text(20, 20, anchor="nw", fill="white", text="이미지 없음", font=FONT)
         self.info.config(text="  |  ".join(notes))
 
-    def _draw(self, image):
+    def _draw(self, image, shapes):
         self.canvas.update_idletasks()
         cw = max(self.canvas.winfo_width(), 400)
         ch = max(self.canvas.winfo_height(), 300)
@@ -263,28 +279,68 @@ class ReviewApp:
         view = image.resize(size, Image.Resampling.LANCZOS)
         self.photo = ImageTk.PhotoImage(view)
         self.canvas.delete("all")
-        self.canvas.create_image(cw // 2, ch // 2, image=self.photo)
+        ox = (cw - size[0]) // 2
+        oy = (ch - size[1]) // 2
+        self.canvas.create_image(ox, oy, anchor="nw", image=self.photo)
+        for shape in shapes:
+            points = []
+            for point in shape.get("points") or []:
+                if not isinstance(point, (list, tuple)) or len(point) < 2:
+                    continue
+                points.append((ox + float(point[0]) * scale, oy + float(point[1]) * scale))
+            if len(points) < 2:
+                continue
+            self.canvas.create_line(points + [points[0]], fill="#ff2d55", width=2)
+            label = shape.get("label") or ""
+            if label:
+                self.canvas.create_text(points[0][0] + 4, points[0][1] - 10, anchor="sw", fill="#ff2d55", text=label, font=FONT_SMALL)
 
     def rotate(self, turn):
         item = self.current()
         if item is None:
             return
         stem, image_path, json_path = item
-        if not image_path or not os.path.isfile(image_path):
+        target = self.rotate_target.get()
+        has_image = bool(image_path and os.path.isfile(image_path))
+        has_json = bool(json_path and os.path.isfile(json_path))
+        if target in ("both", "image") and not has_image:
             messagebox.showerror("이미지 없음", "회전할 이미지가 없습니다.")
             return
-        image = Image.open(image_path).convert("RGB")
-        width, height = image.size
-        turned = rotate_image(image, turn)
-        save_image(turned, image_path)
-        if json_path and os.path.isfile(json_path):
-            data = json.load(open(json_path, encoding="utf-8"))
-            rotate_json(data, width, height, turn)
-            data["imagePath"] = os.path.basename(image_path)
-            with open(json_path, "w", encoding="utf-8") as fp:
-                json.dump(data, fp, ensure_ascii=False, indent=2)
+        if target in ("both", "json") and not has_json:
+            messagebox.showerror("json 없음", "같은 이름의 json이 없습니다.")
+            return
+        if has_image:
+            image = Image.open(image_path).convert("RGB")
+            width, height = image.size
+        else:
+            image = None
+            with open(json_path, encoding="utf-8") as fp:
+                meta = json.load(fp)
+            width = int(meta.get("imageWidth") or 0)
+            height = int(meta.get("imageHeight") or 0)
         names = {"cw": "오른쪽 90°", "ccw": "왼쪽 90°", "180": "180°"}
-        self.status.config(text="%s 저장" % names[turn])
+        changed = 0
+        if target in ("both", "json"):
+            try:
+                with open(json_path, encoding="utf-8") as fp:
+                    data = json.load(fp)
+                changed = rotate_json(data, width, height, turn)
+                if changed == 0:
+                    messagebox.showerror("좌표 없음", "json에 돌릴 점이 없습니다.")
+                    return
+                if has_image:
+                    data["imagePath"] = os.path.basename(image_path)
+                with open(json_path, "w", encoding="utf-8") as fp:
+                    json.dump(data, fp, ensure_ascii=False, indent=2)
+                    fp.flush()
+                    os.fsync(fp.fileno())
+            except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                messagebox.showerror("json 저장 실패", str(exc))
+                return
+        if target in ("both", "image"):
+            save_image(rotate_image(image, turn), image_path)
+        done = {"both": "이미지+json", "image": "이미지만", "json": "json만"}[target]
+        self.status.config(text="%s %s 저장, 점 %d개" % (names[turn], done, changed))
         self.show()
 
     def rename(self):
