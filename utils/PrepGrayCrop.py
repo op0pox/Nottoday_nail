@@ -1,3 +1,32 @@
+# -*- coding: utf-8 -*-
+"""
+PrepGrayCrop.py
+LabelMe json 폴리곤으로 손톱을 잘라 검은 배경·그레이로 저장한다.
+
+전제조건:
+  입력 이미지는 손이 아래에서 위를 향하도록, 세로(11자)로 반듯하게 정렬되어 있어야 한다.
+  그래서 여러 손톱은 x축(왼쪽→오른쪽) 순서로만 가른다.
+
+파일명:
+  순번_손_손가락[_side]
+  손: L, R, LR(양손). LF는 LR 오타로 본다.
+  _side: 측면. 없으면 정면.
+  _4F: 네 손가락 정면을 한 장에 촬영. LR_4F는 양손이라 폴리곤 8개.
+  LR_손가락: 양손의 같은 손가락. 폴리곤은 최대 2개.
+
+자를 때 왼쪽부터:
+  왼손 L: 05 04 03 02
+  오른손 R: 02 03 04 05
+  양손 LR: 05 04 03 02 02 03 04 05
+  새끼손가락=05, 검지=02, 엄지=01
+
+출력 파일명:
+  순번_손_손가락_front_nail.jpg
+  순번_손_손가락_side_nail.jpg
+  이름순으로 정렬하면 같은 손가락의 정면, 측면이 붙는다.
+
+크롭 뒤 손톱이 살짝 기울어 있으면, 긴 축이 세로가 되도록 한 번 더 바로잡는다.
+"""
 import json
 import os
 import re
@@ -6,12 +35,10 @@ import numpy as np
 from PIL import Image, ImageOps
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-ORIGIN_FOLDER_DIR = os.path.join(SCRIPT_DIR, "..", "Training", "UprightMapped")
-TARGET_FOLDER_DIR = os.path.join(SCRIPT_DIR, "..", "Training", "update_data")
+ORIGIN_FOLDER_DIR = r"C:\Users\USER\Downloads\파일정리"
+TARGET_FOLDER_DIR = r"C:\Users\USER\Downloads\파일정리_nail"
 
 PADDING_RATIO = 0.05
-GROUPS = ("thumb", "other")
-CLASSES = ("P", "S")
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 LEFT_ORDER = ("05", "04", "03", "02")
 RIGHT_ORDER = ("02", "03", "04", "05")
@@ -20,10 +47,6 @@ BOTH_ORDER = (
     ("R", "02"), ("R", "03"), ("R", "04"), ("R", "05"),
 )
 STEM_RE = re.compile(r"^(?P<id>.+?)_(?P<hand>LF|LR|L|R)(?:_(?P<rest>.*))?$")
-CLEAN_RE = re.compile(
-    r"^(?P<id>\d+)_(?P<hand>LF|LR|L|R)_(?P<finger>0[1-5])(?P<side>_side)?$",
-    re.IGNORECASE,
-)
 
 
 def load_image(path, json_size):
@@ -41,15 +64,6 @@ def load_image(path, json_size):
 
 def is_image_name(name):
     return os.path.splitext(name)[1].lower() in IMAGE_EXTS
-
-
-def list_images(folder):
-    if not os.path.isdir(folder):
-        return []
-    return sorted(
-        name for name in os.listdir(folder)
-        if is_image_name(name) and os.path.isfile(os.path.join(folder, name))
-    )
 
 
 def padded_crop_box(points, image_width, image_height, pad_ratio=PADDING_RATIO):
@@ -82,6 +96,36 @@ def crop_on_black(bgr, polygon):
     black = np.zeros_like(crop)
     black[mask > 0] = crop[mask > 0]
     return cv2.cvtColor(black, cv2.COLOR_BGR2GRAY)
+
+
+def straighten_gray(gray, max_degrees=20):
+    """크롭된 손톱의 긴 축을 세로로 맞춘다. 이미 11자에 가까우면 살짝만 돌린다."""
+    fg = gray > 15
+    ys, xs = np.nonzero(fg)
+    if len(xs) < 30:
+        return gray
+    pts = np.stack([xs, ys], axis=1).astype(np.float32)
+    _center, (rw, rh), angle = cv2.minAreaRect(pts)
+    # minAreaRect 각도는 가로변 기준 [-90, 0). 긴 변이 세로가 되도록 보정각을 고른다.
+    if rw < rh:
+        tilt = angle + 90
+    else:
+        tilt = angle
+    if tilt > 45:
+        tilt -= 90
+    elif tilt < -45:
+        tilt += 90
+    if abs(tilt) < 0.4 or abs(tilt) > max_degrees:
+        return gray
+    height, width = gray.shape[:2]
+    matrix = cv2.getRotationMatrix2D((width / 2, height / 2), tilt, 1.0)
+    cos = abs(matrix[0, 0])
+    sin = abs(matrix[0, 1])
+    new_w = int(height * sin + width * cos)
+    new_h = int(height * cos + width * sin)
+    matrix[0, 2] += (new_w - width) / 2
+    matrix[1, 2] += (new_h - height) / 2
+    return cv2.warpAffine(gray, matrix, (new_w, new_h), flags=cv2.INTER_LINEAR, borderValue=0)
 
 
 def polygons_from_json(path):
@@ -119,6 +163,8 @@ def parse_stem(stem):
 
 def finger_token(rest):
     token = rest.lower().replace("side", "").strip("_")
+    if token == "4f":
+        return "4F"
     if "thumb" in token:
         return "01"
     match = re.match(r"0[1-5]", token)
@@ -127,88 +173,60 @@ def finger_token(rest):
     return None
 
 
-def is_bundle(rest):
-    token = rest.lower().replace("side", "").strip("_")
-    if token in {"", "4f", "00", "front", "front1", "front2"}:
-        return True
-    return "4f" in token or token.startswith("front")
-
-
 def by_x(polygons):
     return sorted(polygons, key=lambda pts: float(pts[:, 0].mean()))
-
-
-def split_lower(polygons, keep):
-    if len(polygons) <= keep:
-        return list(polygons), []
-    order = sorted(range(len(polygons)), key=lambda i: float(polygons[i][:, 1].mean()))
-    upper = [polygons[i] for i in order[:keep]]
-    lower = [polygons[i] for i in order[keep:]]
-    return upper, lower
 
 
 def nail_name(person, hand, finger, view):
     return f"{person}_{hand}_{finger}_{view}_nail"
 
 
-def assign_nails(stem, polygons, source_group, view=None):
+def assign_nails(stem, polygons):
+    """x축 왼쪽→오른쪽 순으로 손가락 번호를 붙인다. 개수가 규칙과 다르면 자르지 않는다."""
+    view = view_of(stem)
     parsed = parse_stem(stem)
-    if view is None:
-        view = view_of(stem)
     if parsed is None:
-        return [(f"{stem}_{view}_nail", source_group, pts) for pts in polygons], "이름 규칙 없음"
+        return [], "이름 규칙 없음"
 
     person, hand, rest = parsed
-    both = hand in {"LF", "LR"}
-    numbered = finger_token(rest)
+    if hand == "LF":
+        hand = "LR"
+    finger = finger_token(rest)
+    ordered = by_x(polygons)
     items = []
 
-    if both and len(polygons) == 2 and numbered is None and ("front" in rest.lower() or "thumb" in rest.lower()):
-        for side, pts in zip(("L", "R"), by_x(polygons)):
-            items.append((nail_name(person, side, "01", view), "thumb", pts))
-        return items, "양손 엄지"
+    if finger == "4F" and hand == "LR":
+        if len(ordered) != 8:
+            return [], f"LR_4F 폴리곤 {len(ordered)}개 (8개 필요)"
+        for (side, num), pts in zip(BOTH_ORDER, ordered):
+            items.append((nail_name(person, side, num, view), pts))
+        return items, "양손 4손가락"
 
-    if not both and len(polygons) == 1 and numbered is None and source_group == "thumb" and is_bundle(rest):
-        return [(nail_name(person, hand, "01", view), "thumb", polygons[0])], "엄지 한 장"
+    if finger == "4F":
+        if len(ordered) != 4:
+            return [], f"{hand}_4F 폴리곤 {len(ordered)}개 (4개 필요)"
+        order = LEFT_ORDER if hand == "L" else RIGHT_ORDER
+        for num, pts in zip(order, ordered):
+            items.append((nail_name(person, hand, num, view), pts))
+        return items, "한손 4손가락"
 
-    if both and numbered and len(polygons) == 2:
-        for side, pts in zip(("L", "R"), by_x(polygons)):
-            items.append((nail_name(person, side, numbered, view), "thumb" if numbered == "01" else "other", pts))
-        return items, "양손 같은 손가락"
+    if hand == "LR" and finger:
+        if len(ordered) > 2:
+            return [], f"LR_{finger} 폴리곤 {len(ordered)}개 (최대 2개)"
+        if len(ordered) == 2:
+            for side, pts in zip(("L", "R"), ordered):
+                items.append((nail_name(person, side, finger, view), pts))
+            return items, "양손 같은 손가락"
+        items.append((nail_name(person, "L", finger, view), ordered[0]))
+        return items, "양손인데 폴리곤 1개"
 
-    if not both and numbered and len(polygons) >= 1:
-        group = "thumb" if numbered == "01" else "other"
-        chosen = max(polygons, key=lambda pts: float((pts[:, 0].max() - pts[:, 0].min()) * (pts[:, 1].max() - pts[:, 1].min())))
-        return [(nail_name(person, hand, numbered, view), group, chosen)], "파일명 손가락"
+    if finger:
+        if len(ordered) != 1:
+            return [], f"{hand}_{finger} 폴리곤 {len(ordered)}개 (1개 필요)"
+        items.append((nail_name(person, hand, finger, view), ordered[0]))
+        return items, "손가락 한 장"
 
-    if is_bundle(rest):
-        if both:
-            upper, lower = split_lower(polygons, 8)
-            if len(upper) == 8:
-                for (side, finger), pts in zip(BOTH_ORDER, by_x(upper)):
-                    items.append((nail_name(person, side, finger, view), "other", pts))
-                for side, pts in zip(("L", "R"), by_x(lower)):
-                    items.append((nail_name(person, side, "01", view), "thumb", pts))
-                return items, "양손 묶음"
-        else:
-            order = LEFT_ORDER if hand == "L" else RIGHT_ORDER
-            upper, lower = split_lower(polygons, 4)
-            if len(upper) == 4:
-                for finger, pts in zip(order, by_x(upper)):
-                    items.append((nail_name(person, hand, finger, view), "other", pts))
-                for pts in lower:
-                    items.append((nail_name(person, hand, "01", view), "thumb", pts))
-                return items, "한손 묶음"
-
-    finger = numbered or "00"
-    group = "thumb" if finger == "01" else "other"
-    side = "L" if hand == "LF" else "R" if hand == "LR" else hand
-    for index, pts in enumerate(by_x(polygons)):
-        name = nail_name(person, side, finger, view)
-        if len(polygons) > 1:
-            name = f"{name}_{index}"
-        items.append((name, source_group if group is None else group, pts))
-    return items, "순서 불명"
+    return [], "손가락 번호 없음"
 
 
 def save_gray(gray, path):
@@ -216,104 +234,62 @@ def save_gray(gray, path):
     cv2.imwrite(path, gray)
 
 
-def clean_name(stem):
-    """순번_손_손가락 또는 순번_손_손가락_side 만 처리 대상이다."""
-    match = CLEAN_RE.match(stem)
-    if not match:
-        return None
-    return person_id(match.group("id")), bool(match.group("side"))
+def iter_sources(root):
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for name in sorted(filenames):
+            if not is_image_name(name):
+                continue
+            yield os.path.join(dirpath, name)
 
 
-def person_key(stem):
-    parsed = parse_stem(stem)
-    if parsed:
-        return parsed[0]
-    return person_id(stem.split("_")[0])
-
-
-def collect_images():
-    rows = []
-    for group in GROUPS:
-        for label in CLASSES:
-            src_dir = os.path.join(ORIGIN_FOLDER_DIR, group, label)
-            for name in list_images(src_dir):
-                stem = os.path.splitext(name)[0]
-                rows.append((person_key(stem), group, label, name, os.path.join(src_dir, name)))
-    return rows
-
-
-SKIP_PEOPLE = {"002", "005"}
-
-
-def is_front_bundle(stem):
-    parsed = parse_stem(stem)
-    if parsed is None:
-        return False
-    rest = parsed[2].lower()
-    return "4f" in rest or rest == "00"
-
-
-def other_view(stem, bundle_person):
-    if is_front_bundle(stem):
-        return "front"
-    if bundle_person:
-        return "side"
-    return "side" if "side" in stem.lower() else "front"
-
-
-def process_one(group, label, src_path, view=None, dest_dir=None):
+def process_one(src_path):
     name = os.path.basename(src_path)
     stem = os.path.splitext(name)[0]
     json_path = os.path.splitext(src_path)[0] + ".json"
     if not os.path.isfile(json_path):
         print(f"  {name}: json 없음")
-        return 0, True
+        return 0, f"{name}: json 없음"
     polygons, json_size = polygons_from_json(json_path)
     if not polygons:
         print(f"  {name}: 폴리곤 없음")
-        return 0, True
+        return 0, f"{name}: 폴리곤 없음"
+    assigned, how = assign_nails(stem, polygons)
+    if not assigned:
+        line = f"{name}: 폴리곤 {len(polygons)}개, {how}"
+        print(f"  {line}")
+        return 0, line
     bgr = load_image(src_path, json_size)
-    assigned, how = assign_nails(stem, polygons, group, view)
-    out_dir = dest_dir or os.path.join(TARGET_FOLDER_DIR, label)
-    for nail, _dest_group, polygon in assigned:
-        gray = crop_on_black(bgr, polygon)
-        dst = os.path.join(out_dir, f"{nail}.jpg")
-        copy_index = 2
-        while os.path.exists(dst):
-            dst = os.path.join(out_dir, f"{nail}_{copy_index}.jpg")
-            copy_index += 1
-        save_gray(gray, dst)
-    shown = view if view is not None else view_of(stem)
-    print(f"  {group}/{label}/{name}: {shown} {how} {len(assigned)}개")
-    return len(assigned), False
+    for nail, polygon in assigned:
+        gray = straighten_gray(crop_on_black(bgr, polygon))
+        save_gray(gray, os.path.join(TARGET_FOLDER_DIR, f"{nail}.jpg"))
+    print(f"  {name}: {how} {len(assigned)}개")
+    return len(assigned), None
 
 
 def main():
     if not os.path.isdir(ORIGIN_FOLDER_DIR):
         raise FileNotFoundError(f"이미지 폴더가 없습니다: {ORIGIN_FOLDER_DIR}")
-
-    rows = [row for row in collect_images() if row[1] == "other" and row[0] not in SKIP_PEOPLE]
-    bundle_people = {
-        person for person, _group, _label, name, _path in rows if is_front_bundle(os.path.splitext(name)[0])
-    }
-    dest = os.path.join(TARGET_FOLDER_DIR, "other")
-    os.makedirs(dest, exist_ok=True)
-    print(f"other 처리 {len(rows)}장, 4F/00 있는 사람 {len(bundle_people)}명, 스킵 {sorted(SKIP_PEOPLE)}")
+    os.makedirs(TARGET_FOLDER_DIR, exist_ok=True)
+    sources = list(iter_sources(ORIGIN_FOLDER_DIR))
+    print(f"입력 {len(sources)}장 → {TARGET_FOLDER_DIR}")
 
     total_crops = 0
-    failed = []
-    for person, group, label, name, path in rows:
-        stem = os.path.splitext(name)[0]
-        view = other_view(stem, person in bundle_people)
-        crops, miss = process_one(group, label, path, view=view, dest_dir=dest)
+    skipped = []
+    for path in sources:
+        crops, reason = process_one(path)
         total_crops += crops
-        if miss:
-            failed.append(os.path.join(group, label, name))
+        if reason:
+            skipped.append(reason)
 
-    print(f"\n완료: 이미지 {len(rows)}장, 크롭 {total_crops}개 → {dest}")
-    print(f"json/폴리곤 없음 {len(failed)}장")
-    for path in failed:
-        print(f"  건너뜀: {path}")
+    log_path = os.path.join(TARGET_FOLDER_DIR, "polygon_skip.txt")
+    with open(log_path, "w", encoding="utf-8") as fp:
+        if skipped:
+            fp.write("\n".join(skipped) + "\n")
+        else:
+            fp.write("폴리곤 개수가 규칙과 다른 파일 없음\n")
+
+    print(f"\n완료: 이미지 {len(sources)}장, 크롭 {total_crops}개")
+    print(f"건너뜀 {len(skipped)}장 → {log_path}")
 
 
 if __name__ == "__main__":

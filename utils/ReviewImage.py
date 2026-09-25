@@ -52,14 +52,16 @@ def rotate_json(data, width, height, turn):
         if moved:
             shape["points"] = moved
             changed += len(moved)
-    if turn == "180":
-        data["imageWidth"] = int(width)
-        data["imageHeight"] = int(height)
-    else:
-        data["imageWidth"] = int(height)
-        data["imageHeight"] = int(width)
     data["imageData"] = None
     return changed
+
+
+def sync_image_meta(data, image, image_name):
+    """LabelMe는 여기 적힌 크기가 사진과 다르면 파일을 열지 않는다."""
+    data["imageWidth"] = int(image.width)
+    data["imageHeight"] = int(image.height)
+    data["imagePath"] = image_name
+    data["imageData"] = None
 
 
 def save_image(image, path):
@@ -328,8 +330,18 @@ class ReviewApp:
                 if changed == 0:
                     messagebox.showerror("좌표 없음", "json에 돌릴 점이 없습니다.")
                     return
-                if has_image:
-                    data["imagePath"] = os.path.basename(image_path)
+                if target == "both":
+                    image = rotate_image(image, turn)
+                    save_image(image, image_path)
+                    sync_image_meta(data, image, os.path.basename(image_path))
+                elif has_image:
+                    sync_image_meta(data, image, os.path.basename(image_path))
+                else:
+                    if turn == "180":
+                        data["imageWidth"], data["imageHeight"] = int(width), int(height)
+                    else:
+                        data["imageWidth"], data["imageHeight"] = int(height), int(width)
+                    data["imageData"] = None
                 with open(json_path, "w", encoding="utf-8") as fp:
                     json.dump(data, fp, ensure_ascii=False, indent=2)
                     fp.flush()
@@ -337,8 +349,17 @@ class ReviewApp:
             except (OSError, json.JSONDecodeError, TypeError, ValueError) as exc:
                 messagebox.showerror("json 저장 실패", str(exc))
                 return
-        if target in ("both", "image"):
-            save_image(rotate_image(image, turn), image_path)
+        if target == "image":
+            image = rotate_image(image, turn)
+            save_image(image, image_path)
+            if has_json:
+                with open(json_path, encoding="utf-8") as fp:
+                    data = json.load(fp)
+                sync_image_meta(data, image, os.path.basename(image_path))
+                with open(json_path, "w", encoding="utf-8") as fp:
+                    json.dump(data, fp, ensure_ascii=False, indent=2)
+                    fp.flush()
+                    os.fsync(fp.fileno())
         done = {"both": "이미지+json", "image": "이미지만", "json": "json만"}[target]
         self.status.config(text="%s %s 저장, 점 %d개" % (names[turn], done, changed))
         self.show()
