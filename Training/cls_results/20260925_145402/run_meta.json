@@ -1,0 +1,12 @@
+{
+  "created": "20260925_145402",
+  "data_dir": "C:\\Users\\USER\\Downloads\\9-24_최종본",
+  "test_ratio": 0.2,
+  "seed": 42,
+  "fingers": [
+    "thumb",
+    "other"
+  ],
+  "n_train": 237,
+  "n_test": 59
+}
