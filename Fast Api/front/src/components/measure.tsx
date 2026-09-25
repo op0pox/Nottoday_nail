@@ -171,18 +171,25 @@ export default function NailMeasurement() {
       )}
 
       {Array.isArray(measurementResults) && (
-        <div style={{ marginTop: '30px', textAlign: 'center', width: '350px' }}>
+        <div style={{ marginTop: '30px', textAlign: 'center', width: '100%', maxWidth: '720px' }}>
           <h3>측정 결과</h3>
-          <ul style={{ listStyle: 'none', padding: 0 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'center' }}>
             {measurementResults.map((res, index) => (
-              <li key={index} style={{ margin: '10px 0', padding: '10px', backgroundColor: '#f9f9f9', borderRadius: '4px' }}>
+              <div key={index} style={{ margin: '10px 0', padding: '10px', backgroundColor: '#f9f9f9', borderRadius: '4px', width: '160px' }}>
+                 {res.preview && (
+                   <img
+                     src={res.preview}
+                     alt={`전처리 ${index + 1}`}
+                     style={{ width: '140px', height: '140px', objectFit: 'contain', background: '#000', display: 'block', margin: '0 auto 8px' }}
+                   />
+                 )}
                  길이 {res.length_mm}mm / 폭 {res.width_mm ? `${res.width_mm}mm` : '측정 불가'}
                  {res.shape ? ` / 쉐입 ${res.shape}` : ''}
                  {res.metric ? ` / ${res.metric === 'xor' ? 'XOR' : 'Chamfer'}` : ''}
                  {res.shape_score != null ? ` (${res.shape_score})` : ''}
-              </li>
+              </div>
             ))}
-          </ul>
+          </div>
         </div>
       )}
     </div>
