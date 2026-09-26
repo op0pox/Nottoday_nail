@@ -1,3 +1,4 @@
+import base64
 import os
 
 import cv2
@@ -7,6 +8,7 @@ from pydantic import BaseModel
 from typing import List, Optional, Tuple
 
 from classification import contour_compare, xor_compare
+from classification.nail_preprocess import prepare_nail_gray
 from classification.compare_pipeline import (
     CATALOG_TEMPLATES,
     extract_shape_code,
@@ -69,6 +71,7 @@ class MeasurementResult(BaseModel):
     shape_score: Optional[float] = None
     metric: Optional[str] = None
     contours: Optional[List[List[Tuple[float, float]]]] = None
+    preview: Optional[str] = None
 
 
 # 사진 한 장에서 손톱 길이·폭·형태 측정
@@ -123,14 +126,21 @@ async def measure_nails(
         best_shape = None
         min_dist = None
         formatted_contours = []
+        preview = None
 
         if nail_mask.contour is not None and len(nail_mask.contour) >= 3:
             formatted_contours = [format_contour(nail_mask.contour)]
-            try:
-                best_shape, min_dist = classify_contour(nail_mask.contour, metric_name)
-            except ValueError:
-                best_shape = None
-                min_dist = None
+            # 분류 모델 입력: 폴리곤으로 원본을 잘라 검은 배경·그레이로 만든다. 정렬은 하지 않는다.
+            gray_nail = prepare_nail_gray(image, nail_mask.contour)
+            if gray_nail is not None:
+                ok, encoded = cv2.imencode(".jpg", gray_nail, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+                if ok:
+                    preview = "data:image/jpeg;base64," + base64.b64encode(encoded.tobytes()).decode("ascii")
+                try:
+                    best_shape, min_dist = classify_contour(nail_mask.contour, metric_name)
+                except ValueError:
+                    best_shape = None
+                    min_dist = None
 
         # measured = measure_nail_from_mask(
         #     nail_mask.mask,
@@ -139,11 +149,15 @@ async def measure_nails(
         #     nail_height_mm=NAIL_HEIGHT_MM,
         # )
 
-        results.append(MeasurementResult(
-            shape=best_shape,
-            shape_score=round(min_dist, 4) if min_dist is not None else None,
-            metric=metric_name,
-            contours=formatted_contours,
-        ))
+        if measured:
+            results.append(MeasurementResult(
+                length_mm=round(measured["length_mm"], 2),
+                width_mm=round(measured["width_mm"], 2) if measured.get("width_mm") is not None else None,
+                shape=best_shape,
+                shape_score=round(min_dist, 4) if min_dist is not None else None,
+                metric=metric_name,
+                contours=formatted_contours,
+                preview=preview,
+            ))
 
     return results

@@ -1,0 +1,12 @@
+{
+  "created": "20260926_172903",
+  "data_dir": "C:\\Users\\USER\\Downloads\\파일정리_cls",
+  "test_ratio": 0.2,
+  "seed": 42,
+  "fingers": [
+    "thumb",
+    "other"
+  ],
+  "n_train": 287,
+  "n_test": 72
+}
