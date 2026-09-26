@@ -9,7 +9,11 @@ import cv2
 
 HOST = "0.0.0.0"
 PORT = 8080
-WIDTH, HEIGHT = 640, 360
+# IMX219 sensor-mode 4. 없는 해상도를 요구하면 모드를 찾느라 느려진다.
+SENSOR_WIDTH, SENSOR_HEIGHT = 1280, 720
+SENSOR_MODE = 4
+SENSOR_FPS = 60
+WIDTH, HEIGHT = SENSOR_WIDTH, SENSOR_HEIGHT
 FRONT_ID = 0
 SIDE_ID = 1
 JPEG_QUALITY = 90
@@ -21,12 +25,12 @@ cap1 = None
 
 def gstreamer_pipeline(sensor_id=0):
     return (
-        "nvarguscamerasrc sensor-id=%d ! "
-        "video/x-raw(memory:NVMM), width=%d, height=%d, format=NV12, framerate=30/1 ! "
+        "nvarguscamerasrc sensor-id=%d sensor-mode=%d ! "
+        "video/x-raw(memory:NVMM), width=%d, height=%d, format=NV12, framerate=%d/1 ! "
         "nvvidconv ! video/x-raw, width=%d, height=%d, format=BGRx ! "
         "videoconvert ! video/x-raw, format=BGR ! "
         "appsink drop=true max-buffers=1 sync=false"
-        % (sensor_id, WIDTH, HEIGHT, WIDTH, HEIGHT)
+        % (sensor_id, SENSOR_MODE, SENSOR_WIDTH, SENSOR_HEIGHT, SENSOR_FPS, WIDTH, HEIGHT)
     )
 
 

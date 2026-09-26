@@ -18,4 +18,4 @@ python3 capture_server.py
 - `GET http://192.168.55.1:8080/health`
 - `GET http://192.168.55.1:8080/shot` → `{ "front": "<jpeg base64>", "side": "<jpeg base64>" }`
 
-해상도는 640x360, GStreamer `nvarguscamerasrc`입니다. 포트 8080이 막혀 있으면 열어 둡니다.
+센서와 전송 이미지는 IMX219 mode 4(1280x720, 60fps)입니다. GStreamer `nvarguscamerasrc`입니다. 포트 8080이 막혀 있으면 열어 둡니다.
