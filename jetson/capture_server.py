@@ -10,22 +10,14 @@ import cv2
 
 HOST = "0.0.0.0"
 PORT = 8080
-<<<<<<< HEAD
-# IMX219 sensor-mode 4. 없는 해상도를 요구하면 모드를 찾느라 느려진다.
-# tnr/ee 를 켜 두면 nvargus 재시작 직후 버퍼를 채울 때까지 프레임이 밀린다.
-SENSOR_WIDTH, SENSOR_HEIGHT = 1280, 720
-SENSOR_MODE = 4
-SENSOR_FPS = 60
-WIDTH, HEIGHT = SENSOR_WIDTH, SENSOR_HEIGHT
-=======
-# 빠른 캡처와 동일. 1280x720 @ 30. mode 4(60fps)를 두 센서에 걸면 두 번째 open이 오래 멈춘다.
+# IMX219 mode 4는 1280x720. 모드를 비우면 탐색이 느리고, 60fps로 두 대를 열면 두 번째 open이 멈춘다.
+# tnr/ee를 켜 두면 재시작 직후 버퍼가 찰 때까지 첫 프레임이 밀린다.
 WIDTH, HEIGHT = 1280, 720
 FPS = 30
->>>>>>> 14f8fc4326012fb6077a2bfcdf96bc9ca775c741
+SENSOR_MODE = 4
 FRONT_ID = 0
 SIDE_ID = 1
 JPEG_QUALITY = 90
-WARMUP_FRAMES = 8
 
 read_lock = threading.Lock()
 frame_lock = threading.Lock()
@@ -37,18 +29,14 @@ latest_side = None
 pump_thread = None
 
 
-def gstreamer_pipeline(sensor_id=0):
+def gstreamer_pipeline(sensor_id):
     return (
-<<<<<<< HEAD
         "nvarguscamerasrc sensor-id=%d sensor-mode=%d tnr-mode=0 ee-mode=0 ! "
-=======
-        "nvarguscamerasrc sensor-id=%d tnr-mode=0 ee-mode=0 ! "
->>>>>>> 14f8fc4326012fb6077a2bfcdf96bc9ca775c741
         "video/x-raw(memory:NVMM), width=%d, height=%d, format=NV12, framerate=%d/1 ! "
         "nvvidconv ! video/x-raw, width=%d, height=%d, format=BGRx ! "
         "videoconvert ! video/x-raw, format=BGR ! "
         "appsink drop=true max-buffers=1 sync=false"
-        % (sensor_id, WIDTH, HEIGHT, FPS, WIDTH, HEIGHT)
+        % (sensor_id, SENSOR_MODE, WIDTH, HEIGHT, FPS, WIDTH, HEIGHT)
     )
 
 
@@ -69,10 +57,7 @@ def open_cameras():
 
 
 def cameras_open():
-    return (
-        cap0 is not None and cap1 is not None
-        and cap0.isOpened() and cap1.isOpened()
-    )
+    return cap0 is not None and cap1 is not None and cap0.isOpened() and cap1.isOpened()
 
 
 def pump_loop():
@@ -105,47 +90,7 @@ def jpeg_b64(frame):
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
-def _read_into(cap, box):
-    box.append(cap.read())
-
-
-def _encode_into(frame, box):
-    box.append(jpeg_b64(frame))
-
-
 def grab_pair():
-<<<<<<< HEAD
-    if cap0 is None or cap1 is None or not cap0.isOpened() or not cap1.isOpened():
-        return None
-    with read_lock:
-        frames = [[], []]
-        readers = [
-            threading.Thread(target=_read_into, args=(cap0, frames[0])),
-            threading.Thread(target=_read_into, args=(cap1, frames[1])),
-        ]
-        for reader in readers:
-            reader.start()
-        for reader in readers:
-            reader.join()
-        if len(frames[0]) != 1 or len(frames[1]) != 1:
-            return None
-        ok0, front = frames[0][0]
-        ok1, side = frames[1][0]
-        if not ok0 or not ok1 or front is None or side is None:
-            return None
-        encoded = [[], []]
-        encoders = [
-            threading.Thread(target=_encode_into, args=(front, encoded[0])),
-            threading.Thread(target=_encode_into, args=(side, encoded[1])),
-        ]
-        for encoder in encoders:
-            encoder.start()
-        for encoder in encoders:
-            encoder.join()
-    if len(encoded[0]) != 1 or len(encoded[1]) != 1:
-        return None
-    front_b64, side_b64 = encoded[0][0], encoded[1][0]
-=======
     with frame_lock:
         if latest_front is None or latest_side is None:
             return None
@@ -153,16 +98,9 @@ def grab_pair():
         side = latest_side
     front_b64 = jpeg_b64(front)
     side_b64 = jpeg_b64(side)
->>>>>>> 14f8fc4326012fb6077a2bfcdf96bc9ca775c741
     if not front_b64 or not side_b64:
         return None
     return {"front": front_b64, "side": side_b64}
-
-
-def warmup():
-    for _ in range(WARMUP_FRAMES):
-        if grab_pair() is None:
-            return
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -214,17 +152,6 @@ class ThreadingServer(socketserver.ThreadingMixIn, HTTPServer):
 
 
 def main():
-<<<<<<< HEAD
-    started = time.time()
-    open_cameras()
-    print("카메라 열기 %.1f초" % (time.time() - started))
-    if cap0 is None or not cap0.isOpened() or cap1 is None or not cap1.isOpened():
-        print("카메라 열기 실패. /shot 은 503 입니다.")
-    else:
-        started = time.time()
-        warmup()
-        print("워밍업 %.1f초" % (time.time() - started))
-=======
     global pump_thread
     started = time.time()
     print("카메라 여는 중")
@@ -239,7 +166,6 @@ def main():
             print("준비완료 %.1f초" % (time.time() - started))
         else:
             print("첫 프레임 대기 실패. /shot 은 503 입니다.")
->>>>>>> 14f8fc4326012fb6077a2bfcdf96bc9ca775c741
     server = ThreadingServer((HOST, PORT), Handler)
     print("capture server http://%s:%d" % (HOST, PORT))
     try:
