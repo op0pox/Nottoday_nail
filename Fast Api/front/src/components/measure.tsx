@@ -72,7 +72,7 @@ async function postMeasure(
   }
 }
 
-function ResultList({ results, scale }: { results: MeasureResult[]; scale: ScaleMode }) {
+function ResultList({ results }: { results: MeasureResult[] }) {
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'center' }}>
       {results.map((res, index) => (
@@ -84,9 +84,7 @@ function ResultList({ results, scale }: { results: MeasureResult[]; scale: Scale
               style={{ width: '140px', height: '140px', objectFit: 'contain', background: '#000', display: 'block', margin: '0 auto 8px' }}
             />
           )}
-          {scale === 'hardware'
-            ? '길이/폭: 하드웨어 실측 미구현'
-            : `길이 ${res.length_mm ?? '-'}mm / 폭 ${res.width_mm ? `${res.width_mm}mm` : '측정 불가'}`}
+          {`길이 ${res.length_mm ?? '-'}mm / 폭 ${res.width_mm ? `${res.width_mm}mm` : '측정 불가'}`}
           {res.shape ? ` / ${res.shape}형입니다` : ''}
         </div>
       ))}
@@ -300,7 +298,7 @@ export default function NailMeasurement() {
       {inputMode === 'file' && shots.length === 0 && Array.isArray(measurementResults) && (
         <div style={{ marginTop: '30px', textAlign: 'center', width: '100%', maxWidth: '720px' }}>
           <h3>측정 결과</h3>
-          <ResultList results={measurementResults} scale={scaleMode} />
+          <ResultList results={measurementResults} />
         </div>
       )}
 
@@ -341,7 +339,7 @@ export default function NailMeasurement() {
                 )}
               </div>
               {shot.error && <p style={{ color: '#c00' }}>{shot.error}</p>}
-              {Array.isArray(shot.results) && <ResultList results={shot.results} scale={scaleMode} />}
+              {Array.isArray(shot.results) && <ResultList results={shot.results} />}
             </div>
           ))}
         </div>

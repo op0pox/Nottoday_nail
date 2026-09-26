@@ -18,6 +18,29 @@ MARKER_MM = float(os.getenv("MARKER_MM"))
 CAMERA_HEIGHT_MM = float(os.getenv("CAMERA_HEIGHT_MM"))
 NAIL_HEIGHT_MM = float(os.getenv("NAIL_HEIGHT_MM"))
 
+# IMX219 고정 거리. px_per_mm = 초점거리(px) / 거리(mm). 1280x720은 2x2 비닝이라 초점거리가 절반이다.
+FOCAL_PX_FULL = 3.04 * 1000.0 / 1.12
+SENSOR_FOCALS = {
+    (3264, 2464): FOCAL_PX_FULL,
+    (1920, 1080): FOCAL_PX_FULL,
+    (1640, 1232): FOCAL_PX_FULL / 2,
+    (1280, 720): FOCAL_PX_FULL / 2,
+}
+
+
+def env_cm(name, default):
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    return float(raw)
+
+
+# 렌즈~손톱 표면. 정면 10.5cm, 측면 7.0cm. 비어 있으면 이 기본값을 쓴다.
+HARDWARE_DISTANCE_CM = {
+    "front": env_cm("FRONT_DISTANCE_CM", 10.5),
+    "side": env_cm("SIDE_DISTANCE_CM", 7.0),
+}
+
 router = APIRouter(prefix="/api")
 SCALE_MODES = ("board", "hardware")
 # board는 체커보드 사진용 세그, hardware는 흰 배경용 세그
@@ -88,6 +111,20 @@ def homography_from_board(image):
     return homography
 
 
+def homography_from_distance(image, distance_cm):
+    if distance_cm <= 0:
+        raise HTTPException(status_code=400, detail="하드웨어 거리는 0보다 커야 합니다.")
+    height, width = image.shape[:2]
+    focal_px = SENSOR_FOCALS.get((width, height)) or SENSOR_FOCALS.get((height, width))
+    if focal_px is None:
+        supported = ", ".join("%dx%d" % (w, h) for w, h in SENSOR_FOCALS)
+        raise HTTPException(status_code=400, detail="지원하지 않는 해상도입니다: %dx%d (%s)" % (width, height, supported))
+    px_per_mm = focal_px / (distance_cm * 10.0)
+    scale = 1.0 / px_per_mm
+    homography = np.array([[scale, 0.0, 0.0], [0.0, scale, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    return homography, distance_cm * 10.0
+
+
 def decode_image(contents):
     image = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
     if image is None:
@@ -102,8 +139,15 @@ def jpeg_data_url(gray):
     return "data:image/jpeg;base64," + base64.b64encode(encoded.tobytes()).decode("ascii")
 
 
-def analyze_view(image, scale_name):
-    homography = homography_from_board(image) if scale_name == "board" else None
+def analyze_view(image, scale_name, camera):
+    if scale_name == "board":
+        homography = homography_from_board(image)
+        camera_height_mm = CAMERA_HEIGHT_MM
+        nail_height_mm = NAIL_HEIGHT_MM
+    else:
+        # 거리는 손톱 표면까지라서 플레이트 시차 보정은 더하지 않는다.
+        homography, camera_height_mm = homography_from_distance(image, HARDWARE_DISTANCE_CM[camera])
+        nail_height_mm = 0.0
     nail_masks = SEG_BACKENDS[scale_name].segment(image)
     if not nail_masks:
         raise HTTPException(status_code=400, detail="Nail detection failed")
@@ -120,21 +164,16 @@ def analyze_view(image, scale_name):
             contours = [format_contour(contour)]
             gray = prepare_nail_gray(image, contour)
 
-        length_mm = None
-        width_mm = None
-        if scale_name == "board":
-            measured = measure_nail_from_mask(
-                nail_mask.mask,
-                homography,
-                camera_height_mm=CAMERA_HEIGHT_MM,
-                nail_height_mm=NAIL_HEIGHT_MM,
-            )
-            if not measured:
-                continue
-            length_mm = round(measured["length_mm"], 2)
-            width_mm = round(measured["width_mm"], 2) if measured.get("width_mm") is not None else None
-        # else:
-        #     하드웨어 mm는 아직 없다. 세그·전처리·형태만 반환한다.
+        measured = measure_nail_from_mask(
+            nail_mask.mask,
+            homography,
+            camera_height_mm=camera_height_mm,
+            nail_height_mm=nail_height_mm,
+        )
+        if not measured:
+            continue
+        length_mm = round(measured["length_mm"], 2)
+        width_mm = round(measured["width_mm"], 2) if measured.get("width_mm") is not None else None
 
         items.append({
             "x": order_x,
@@ -177,11 +216,11 @@ async def measure_nails(
         raise HTTPException(status_code=400, detail="group은 thumb 또는 other 이어야 합니다.")
 
     front_image = decode_image(await file.read())
-    front_items = analyze_view(front_image, scale_name)
+    front_items = analyze_view(front_image, scale_name, "front")
     side_items = None
     if side is not None and side.filename:
         side_image = decode_image(await side.read())
-        side_items = analyze_view(side_image, scale_name)
+        side_items = analyze_view(side_image, scale_name, "side")
         assign_shapes(front_items, side_items, FINGER_GROUPS[group_name])
 
     return MeasureResponse(
