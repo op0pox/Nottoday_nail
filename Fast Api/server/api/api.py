@@ -65,7 +65,7 @@ def classify_contour(contour, metric_name):
 
 # 손톱 한 개의 측정 결과
 class MeasurementResult(BaseModel):
-    length_mm: float
+    length_mm: Optional[float] = None
     width_mm: Optional[float] = None
     shape: Optional[str] = None
     shape_score: Optional[float] = None
@@ -75,32 +75,19 @@ class MeasurementResult(BaseModel):
 
 
 # 사진 한 장에서 손톱 길이·폭·형태 측정
-@router.post("/measure", response_model=List[MeasurementResult])
-async def measure_nails(
-    file: UploadFile = File(...),
-    metric: str = Form("chamfer"),
-):
-    metric_name = (metric or "chamfer").strip().lower()
-    if metric_name not in COMPARE_METRICS:
-        raise HTTPException(status_code=400, detail="metric은 chamfer 또는 xor 이어야 합니다.")
-    contents = await file.read()
-    nparr = np.frombuffer(contents, np.uint8)
-    image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+SCALE_MODES = ("board", "hardware")
 
-    if image is None:
-        raise HTTPException(status_code=400, detail="Invalid image")
 
+def homography_from_board(image):
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     charuco_corners, charuco_ids, _, _ = detector.detectBoard(gray)
     if charuco_corners is None or charuco_ids is None or len(charuco_corners) < 4:
-        # 코너가 모자라면 국소 대비를 올려 한 번 더 시도한다
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         charuco_corners, charuco_ids = detector.detectBoard(clahe.apply(gray))[:2]
 
     if charuco_corners is None or charuco_ids is None or len(charuco_corners) < 4:
         raise HTTPException(status_code=400, detail="ChArUco failed")
 
-    # 코너 ID는 (SQUARES_X-1)열 격자를 행 우선으로 센 번호라, 몫·나머지로 격자 위치를 되돌린다
     cols = SQUARES_X - 1
     image_points = charuco_corners.reshape(-1, 2).astype(np.float32)
     mm_points = np.array(
@@ -110,11 +97,33 @@ async def measure_nails(
         ],
         dtype=np.float32,
     )
-
-    # 픽셀 좌표를 보드 평면의 mm 좌표로 옮기는 행렬
-    H, _ = cv2.findHomography(image_points, mm_points, cv2.RANSAC, 2.0)
-    if H is None:
+    homography, _ = cv2.findHomography(image_points, mm_points, cv2.RANSAC, 2.0)
+    if homography is None:
         raise HTTPException(status_code=400, detail="Homography failed")
+    return homography
+
+
+@router.post("/measure", response_model=List[MeasurementResult])
+async def measure_nails(
+    file: UploadFile = File(...),
+    metric: str = Form("chamfer"),
+    scale: str = Form("board"),
+):
+    metric_name = (metric or "chamfer").strip().lower()
+    scale_name = (scale or "board").strip().lower()
+    if metric_name not in COMPARE_METRICS:
+        raise HTTPException(status_code=400, detail="metric은 chamfer 또는 xor 이어야 합니다.")
+    if scale_name not in SCALE_MODES:
+        raise HTTPException(status_code=400, detail="scale은 board 또는 hardware 이어야 합니다.")
+    contents = await file.read()
+    nparr = np.frombuffer(contents, np.uint8)
+    image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+    if image is None:
+        raise HTTPException(status_code=400, detail="Invalid image")
+
+    # board: 사진 속 체커보드로 mm 변환. hardware: 고정 기구 실측은 아직 없음.
+    homography = homography_from_board(image) if scale_name == "board" else None
 
     nail_masks = backend.segment(image)
     if not nail_masks:
@@ -141,22 +150,30 @@ async def measure_nails(
                     best_shape = None
                     min_dist = None
 
-        measured = measure_nail_from_mask(
-            nail_mask.mask,
-            H,
-            camera_height_mm=CAMERA_HEIGHT_MM,
-            nail_height_mm=NAIL_HEIGHT_MM,
-        )
+        length_mm = None
+        width_mm = None
+        if scale_name == "board":
+            measured = measure_nail_from_mask(
+                nail_mask.mask,
+                homography,
+                camera_height_mm=CAMERA_HEIGHT_MM,
+                nail_height_mm=NAIL_HEIGHT_MM,
+            )
+            if not measured:
+                continue
+            length_mm = round(measured["length_mm"], 2)
+            width_mm = round(measured["width_mm"], 2) if measured.get("width_mm") is not None else None
+        # else:
+        #     하드웨어 mm는 아직 없다. 세그·전처리·형태만 반환한다.
 
-        if measured:
-            results.append(MeasurementResult(
-                length_mm=round(measured["length_mm"], 2),
-                width_mm=round(measured["width_mm"], 2) if measured.get("width_mm") is not None else None,
-                shape=best_shape,
-                shape_score=round(min_dist, 4) if min_dist is not None else None,
-                metric=metric_name,
-                contours=formatted_contours,
-                preview=preview,
-            ))
+        results.append(MeasurementResult(
+            length_mm=length_mm,
+            width_mm=width_mm,
+            shape=best_shape,
+            shape_score=round(min_dist, 4) if min_dist is not None else None,
+            metric=metric_name,
+            contours=formatted_contours,
+            preview=preview,
+        ))
 
     return results
