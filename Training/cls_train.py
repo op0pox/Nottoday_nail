@@ -59,13 +59,14 @@ MEAN, STD = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]  # ImageNet 정규화�
 # ----------------------------------------------------------------------------
 # 설정 (CLI 대신 여기만 수정)
 # ----------------------------------------------------------------------------
-DATA_DIR = r"C:\Users\USER\Downloads\9-24_최종본"  # thumb/, other/ 아래에 P/, S/
+DATA_DIR = r"C:\Users\USER\Downloads\파일정리_cls"  # thumb/, other/ 아래에 P/, S/
 FINGER_SPLITS = ("thumb", "other")  # 엄지 / 그 외 손가락을 따로 학습
 FRONT_TAG = "_front_nail"
 SIDE_TAG = "_side_nail"
 GROUP_REGEX = None  # 예: r"^([^_]+)_"  지정 시 StratifiedGroupKFold
 TEST_RATIO = 0.20  # 손가락 쌍 단위 hold-out. 남은 80%로 CV + 최종 학습
 RUN_TEST_AFTER_TRAIN = True
+SWITCH_CSV = str(SCRIPT_DIR / "sample_switch.csv")  # use=1 학습, use=0 제외. 이미지 파일은 지우지 않는다.
 
 MODE = "finetune"  # "linear" | "finetune"
 BACKBONE = "resnet18"
@@ -148,6 +149,42 @@ def collect_samples(root, front_tag, side_tag, group_regex=None):
     print(f"총 {len(samples)}세트  (P={labels.count(0)}, S={labels.count(1)}), "
           f"그룹 수={len(set(s['group'] for s in samples))}")
     return samples
+
+
+def _switch_off(flag):
+    return str(flag).strip().lower() in {"0", "0.0", "off", "false", "x", "no", "끄기"}
+
+
+def load_disabled(path):
+    """use=0 인 (split, 샘플id) 집합. 파일이 없으면 None."""
+    csv_path = Path(path) if path else None
+    if csv_path is None or not csv_path.is_file():
+        return None
+    disabled = set()
+    with open(csv_path, encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        fields = reader.fieldnames or []
+        if "use" not in fields or "id" not in fields:
+            raise ValueError(f"스위치 파일에 use, id 열이 필요합니다: {csv_path}")
+        for row in reader:
+            sid = (row.get("id") or "").strip()
+            split = (row.get("split") or "").strip()
+            if sid and _switch_off(row.get("use")):
+                disabled.add((split, sid.split("/", 1)[-1]))
+    return disabled
+
+
+def apply_switch(samples, split_name, disabled):
+    if disabled is None:
+        return samples, []
+    kept, dropped = [], []
+    for sample in samples:
+        sid = sample["id"].split("/", 1)[-1]
+        if (split_name, sid) in disabled or ("", sid) in disabled:
+            dropped.append(sid)
+        else:
+            kept.append(sample)
+    return kept, dropped
 
 
 def person_id_from_sample(sample):
@@ -512,11 +549,21 @@ def main():
 
     rng = random.Random(SEED)
     split_rows = []
+    disabled = load_disabled(SWITCH_CSV)
+    if disabled is None:
+        print("스위치 파일 없음, 전체 샘플 사용")
+    else:
+        print(f"스위치: {SWITCH_CSV}  (끔 {len(disabled)}세트)")
     for split_name in FINGER_SPLITS:
         split_dir = Path(data_dir) / split_name
         if not split_dir.is_dir():
             raise FileNotFoundError(f"{split_name} 폴더가 없습니다: {split_dir}")
         samples = collect_samples(split_dir, args.front_tag, args.side_tag, args.group_regex)
+        samples, dropped = apply_switch(samples, split_name, disabled)
+        if dropped:
+            print(f"  제외 {len(dropped)}세트: {', '.join(dropped)}")
+        if len(samples) < 2:
+            raise RuntimeError(f"{split_name} 샘플이 {len(samples)}세트입니다. use=0 을 줄이세요.")
         train_samples, test_samples = split_train_test(samples, TEST_RATIO, rng)
         print(f"  hold-out  train={len(train_samples)}  test={len(test_samples)}  "
               f"(test {len(test_samples) / max(len(samples), 1):.0%})")
@@ -539,6 +586,8 @@ def main():
         data_dir=data_dir,
         test_ratio=TEST_RATIO,
         seed=SEED,
+        switch_csv=SWITCH_CSV if disabled is not None else None,
+        switch_off=sorted(f"{split}/{sid}" for split, sid in disabled) if disabled else [],
         fingers=list(FINGER_SPLITS),
         n_train=sum(1 for r in split_rows if r["usage"] == "train"),
         n_test=sum(1 for r in split_rows if r["usage"] == "test"),
