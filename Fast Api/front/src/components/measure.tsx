@@ -4,15 +4,19 @@ const JETSON_URL = import.meta.env.VITE_JETSON_URL as string | undefined;
 
 type InputMode = 'file' | 'jetson';
 type ScaleMode = 'board' | 'hardware';
+type FingerGroup = 'thumb' | 'other';
 
 type MeasureResult = {
   length_mm?: number | null;
   width_mm?: number | null;
-  shape?: string;
-  metric?: string;
-  shape_score?: number | null;
+  shape?: string | null;
   contours?: unknown;
   preview?: string;
+};
+
+type MeasurePayload = {
+  front: MeasureResult[];
+  side: MeasureResult[] | null;
 };
 
 type ShotView = {
@@ -42,24 +46,29 @@ function b64ToFile(b64: string, name: string): File {
 
 async function postMeasure(
   file: File,
-  metric: string,
   scale: ScaleMode,
-): Promise<{ results: MeasureResult[] | null; error: string | null }> {
+  group: FingerGroup,
+  side?: File | null,
+): Promise<{ payload: MeasurePayload | null; error: string | null }> {
   const formData = new FormData();
   formData.append('file', file);
-  formData.append('metric', metric);
   formData.append('scale', scale);
+  formData.append('group', group);
+  if (side) formData.append('side', side);
   try {
     const response = await fetch('http://localhost:8000/api/measure', {
       method: 'POST',
       body: formData,
     });
     const data = await response.json();
-    if (!response.ok) return { results: null, error: errorText(data, '측정에 실패했습니다.') };
-    if (!Array.isArray(data)) return { results: null, error: '예상하지 못한 응답입니다.' };
-    return { results: data, error: null };
+    if (!response.ok) return { payload: null, error: errorText(data, '측정에 실패했습니다.') };
+    if (!data || !Array.isArray(data.front)) return { payload: null, error: '예상하지 못한 응답입니다.' };
+    return {
+      payload: { front: data.front, side: Array.isArray(data.side) ? data.side : null },
+      error: null,
+    };
   } catch {
-    return { results: null, error: '서버에 연결하지 못했습니다.' };
+    return { payload: null, error: '서버에 연결하지 못했습니다.' };
   }
 }
 
@@ -78,9 +87,7 @@ function ResultList({ results, scale }: { results: MeasureResult[]; scale: Scale
           {scale === 'hardware'
             ? '길이/폭: 하드웨어 실측 미구현'
             : `길이 ${res.length_mm ?? '-'}mm / 폭 ${res.width_mm ? `${res.width_mm}mm` : '측정 불가'}`}
-          {res.shape ? ` / 쉐입 ${res.shape}` : ''}
-          {res.metric ? ` / ${res.metric === 'xor' ? 'XOR' : 'Chamfer'}` : ''}
-          {res.shape_score != null ? ` (${res.shape_score})` : ''}
+          {res.shape ? ` / ${res.shape}형입니다` : ''}
         </div>
       ))}
     </div>
@@ -91,8 +98,9 @@ export default function NailMeasurement() {
   const [inputMode, setInputMode] = useState<InputMode>('file');
   const [scaleMode, setScaleMode] = useState<ScaleMode>('board');
   const [imageFile, setImageFile] = useState<File | null>(null);
+  const [sideFile, setSideFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [metric, setMetric] = useState<'chamfer' | 'xor'>('chamfer');
+  const [fingerGroup, setFingerGroup] = useState<FingerGroup>('other');
   const [measurementResults, setMeasurementResults] = useState<MeasureResult[] | null>(null);
   const [shots, setShots] = useState<ShotView[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -113,16 +121,32 @@ export default function NailMeasurement() {
       setImageFile(file);
       setImagePreview(URL.createObjectURL(file));
       setMeasurementResults(null);
+      setShots([]);
       setErrorMessage(null);
     }
   };
 
+  const handleSideChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files && e.target.files.length > 0 ? e.target.files[0] : null;
+    setSideFile(file);
+    setMeasurementResults(null);
+    setShots([]);
+    setErrorMessage(null);
+  };
+
   const handleSubmit = async () => {
     if (!imageFile) return;
-    const measured = await postMeasure(imageFile, metric, scaleMode);
+    const measured = await postMeasure(imageFile, scaleMode, fingerGroup, sideFile);
     setShots([]);
-    setMeasurementResults(measured.results);
+    setMeasurementResults(measured.payload?.front ?? null);
     setErrorMessage(measured.error);
+    if (measured.payload?.side && sideFile) {
+      const emptySize = { width: 0, height: 0 };
+      setShots([
+        { label: '정면', preview: URL.createObjectURL(imageFile), results: measured.payload.front, error: null, imageSize: emptySize, displaySize: emptySize },
+        { label: '측면', preview: URL.createObjectURL(sideFile), results: measured.payload.side, error: null, imageSize: emptySize, displaySize: emptySize },
+      ]);
+    }
   };
 
   const handleJetsonShot = async () => {
@@ -147,14 +171,16 @@ export default function NailMeasurement() {
         { label: '정면', preview: URL.createObjectURL(frontFile), results: null, error: null, imageSize: emptySize, displaySize: emptySize },
         { label: '측면', preview: URL.createObjectURL(sideFile), results: null, error: null, imageSize: emptySize, displaySize: emptySize },
       ]);
-      const [frontMeasured, sideMeasured] = await Promise.all([
-        postMeasure(frontFile, metric, scaleMode),
-        postMeasure(sideFile, metric, scaleMode),
-      ]);
-      setShots((prev) => prev.map((shot, index) => {
-        const measured = index === 0 ? frontMeasured : sideMeasured;
-        return { ...shot, results: measured.results, error: measured.error };
-      }));
+      const measured = await postMeasure(frontFile, scaleMode, fingerGroup, sideFile);
+      if (!measured.payload) {
+        setShots((prev) => prev.map((shot) => ({ ...shot, results: null, error: measured.error })));
+        return;
+      }
+      setShots((prev) => prev.map((shot, index) => ({
+        ...shot,
+        results: index === 0 ? measured.payload!.front : measured.payload!.side,
+        error: null,
+      })));
     } catch {
       setShots([]);
       setErrorMessage('Jetson에 연결하지 못했습니다.');
@@ -178,11 +204,11 @@ export default function NailMeasurement() {
         <div>
           <div style={{ marginBottom: '6px' }}>입력</div>
           <label>
-            <input type="radio" name="inputMode" checked={inputMode === 'file'} onChange={() => setInputMode('file')} />
+            <input type="radio" name="inputMode" checked={inputMode === 'file'} onChange={() => { setInputMode('file'); setShots([]); setMeasurementResults(null); setErrorMessage(null); }} />
             {' '}사진 파일
           </label>
           <label style={{ marginLeft: '12px' }}>
-            <input type="radio" name="inputMode" checked={inputMode === 'jetson'} onChange={() => setInputMode('jetson')} />
+            <input type="radio" name="inputMode" checked={inputMode === 'jetson'} onChange={() => { setInputMode('jetson'); setShots([]); setMeasurementResults(null); setErrorMessage(null); }} />
             {' '}Jetson
           </label>
         </div>
@@ -200,20 +226,28 @@ export default function NailMeasurement() {
       </div>
 
       <div style={{ display: 'flex', gap: '16px', marginBottom: '12px', fontSize: '14px' }}>
+        <div style={{ marginRight: '8px' }}>분류</div>
         <label>
-          <input type="radio" name="metric" checked={metric === 'chamfer'} onChange={() => setMetric('chamfer')} />
-          {' '}Chamfer
+          <input type="radio" name="fingerGroup" checked={fingerGroup === 'thumb'} onChange={() => setFingerGroup('thumb')} />
+          {' '}엄지
         </label>
         <label>
-          <input type="radio" name="metric" checked={metric === 'xor'} onChange={() => setMetric('xor')} />
-          {' '}XOR
+          <input type="radio" name="fingerGroup" checked={fingerGroup === 'other'} onChange={() => setFingerGroup('other')} />
+          {' '}나머지
         </label>
       </div>
 
       {inputMode === 'file' && (
         <div style={{ position: 'relative', display: 'inline-block', marginBottom: '20px' }}>
-          <input type="file" accept="image/*" onChange={handleFileChange} style={{ marginBottom: '10px', display: 'block' }} />
-          {imagePreview && (
+          <label style={{ display: 'block', marginBottom: '8px', fontSize: '14px' }}>
+            정면
+            <input type="file" accept="image/*" onChange={handleFileChange} style={{ marginLeft: '8px' }} />
+          </label>
+          <label style={{ display: 'block', marginBottom: '10px', fontSize: '14px' }}>
+            측면
+            <input type="file" accept="image/*" onChange={handleSideChange} style={{ marginLeft: '8px' }} />
+          </label>
+          {imagePreview && shots.length === 0 && (
             <div style={{ position: 'relative', display: 'block', width: 'fit-content', lineHeight: 0 }}>
               <img
                 ref={imageRef}
@@ -263,14 +297,14 @@ export default function NailMeasurement() {
 
       {errorMessage && <p style={{ marginTop: '16px', color: '#c00' }}>{errorMessage}</p>}
 
-      {inputMode === 'file' && Array.isArray(measurementResults) && (
+      {inputMode === 'file' && shots.length === 0 && Array.isArray(measurementResults) && (
         <div style={{ marginTop: '30px', textAlign: 'center', width: '100%', maxWidth: '720px' }}>
           <h3>측정 결과</h3>
           <ResultList results={measurementResults} scale={scaleMode} />
         </div>
       )}
 
-      {inputMode === 'jetson' && shots.length > 0 && (
+      {shots.length > 0 && (
         <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap', justifyContent: 'center', marginTop: '12px' }}>
           {shots.map((shot, index) => (
             <div key={shot.label} style={{ textAlign: 'center' }}>

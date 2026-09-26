@@ -9,4 +9,3 @@ ultralytics
 pillow
 python-multipart
 requests
-scipy

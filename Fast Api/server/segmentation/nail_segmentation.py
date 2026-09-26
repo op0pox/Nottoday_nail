@@ -1,10 +1,10 @@
 import os
+from pathlib import Path
 
 import cv2
 import numpy as np
 from ultralytics import YOLO
 
-MODEL_DIR = os.getenv("MODEL_DIR")
 CAMERA_HEIGHT_MM = float(os.getenv("CAMERA_HEIGHT_MM"))
 NAIL_HEIGHT_MM = float(os.getenv("NAIL_HEIGHT_MM"))
 TARGET_POINTS = 100
@@ -54,16 +54,22 @@ class NailMask:
         self.contour = contour
 
 
+def models_dir():
+    return os.getenv("MODELS_DIR") or str(Path(__file__).resolve().parents[2] / "models")
+
+
+def model_path(filename):
+    return os.path.join(models_dir(), filename)
+
+
 # YOLO 세그멘테이션으로 손톱 마스크 추출
 class YoloNailBackend:
-    def __init__(self, conf=0.25, min_area_ratio=0.0003):
+    def __init__(self, weights, conf=0.25, min_area_ratio=0.0003):
         self.conf = conf
         self.min_area_ratio = min_area_ratio
-        if not MODEL_DIR:
-            raise RuntimeError("MODEL_DIR is not set")
-        if not MODEL_DIR.startswith(("http://", "https://")) and not os.path.isfile(MODEL_DIR):
-            raise FileNotFoundError(f"YOLO weights not found: {MODEL_DIR}")
-        self.model = YOLO(MODEL_DIR)
+        if not os.path.isfile(weights):
+            raise FileNotFoundError(f"YOLO weights not found: {weights}")
+        self.model = YOLO(weights)
 
     # 이미지 한 장 -> NailMask 목록 (신뢰도 상위 5개)
     def segment(self, image_bgr):

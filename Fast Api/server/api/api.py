@@ -7,14 +7,9 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from typing import List, Optional, Tuple
 
-from classification import contour_compare, xor_compare
 from classification.nail_preprocess import prepare_nail_gray
-from classification.compare_pipeline import (
-    CATALOG_TEMPLATES,
-    extract_shape_code,
-    nearest_template,
-)
-from segmentation.nail_segmentation import YoloNailBackend, measure_nail_from_mask
+from classification.shape_model import ShapeClassifier
+from segmentation.nail_segmentation import YoloNailBackend, measure_nail_from_mask, model_path
 
 SQUARES_X = int(os.getenv("SQUARES_X"))
 SQUARES_Y = int(os.getenv("SQUARES_Y"))
@@ -24,13 +19,16 @@ CAMERA_HEIGHT_MM = float(os.getenv("CAMERA_HEIGHT_MM"))
 NAIL_HEIGHT_MM = float(os.getenv("NAIL_HEIGHT_MM"))
 
 router = APIRouter(prefix="/api")
-DEFAULT_SAMPLES = 160
-COMPARE_METRICS = {
-    "chamfer": contour_compare,
-    "xor": xor_compare,
+SCALE_MODES = ("board", "hardware")
+# board는 체커보드 사진용 세그, hardware는 흰 배경용 세그
+SEG_BACKENDS = {
+    "board": YoloNailBackend(model_path("seg_checkerboard.pt")),
+    "hardware": YoloNailBackend(model_path("seg_white.pt")),
 }
-
-backend = YoloNailBackend(conf=0.25)
+FINGER_GROUPS = {
+    "thumb": ShapeClassifier(model_path("cls_thumb.pt")),
+    "other": ShapeClassifier(model_path("cls_other.pt")),
+}
 aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_250)
 board = cv2.aruco.CharucoBoard((SQUARES_X, SQUARES_Y), SQUARE_MM, MARKER_MM, aruco_dict)
 
@@ -51,31 +49,18 @@ def format_contour(contour):
     return [[float(x), float(y)] for x, y in np.asarray(contour, dtype=np.float32).reshape(-1, 2)]
 
 
-def classify_contour(contour, metric_name):
-    metric = COMPARE_METRICS[metric_name]
-    result = nearest_template(
-        np.asarray(contour, dtype=np.float32).reshape(-1, 2),
-        CATALOG_TEMPLATES,
-        DEFAULT_SAMPLES,
-        "cuticle",
-        metric,
-    )
-    return extract_shape_code(result["predicted_shape"]), float(result["distance"])
-
-
-# 손톱 한 개의 측정 결과
-class MeasurementResult(BaseModel):
+# 손톱 한 개의 측정 결과. shape 는 정면·측면이 둘 다 있을 때만 채워진다.
+class NailView(BaseModel):
     length_mm: Optional[float] = None
     width_mm: Optional[float] = None
     shape: Optional[str] = None
-    shape_score: Optional[float] = None
-    metric: Optional[str] = None
     contours: Optional[List[List[Tuple[float, float]]]] = None
     preview: Optional[str] = None
 
 
-# 사진 한 장에서 손톱 길이·폭·형태 측정
-SCALE_MODES = ("board", "hardware")
+class MeasureResponse(BaseModel):
+    front: List[NailView]
+    side: Optional[List[NailView]] = None
 
 
 def homography_from_board(image):
@@ -103,52 +88,37 @@ def homography_from_board(image):
     return homography
 
 
-@router.post("/measure", response_model=List[MeasurementResult])
-async def measure_nails(
-    file: UploadFile = File(...),
-    metric: str = Form("chamfer"),
-    scale: str = Form("board"),
-):
-    metric_name = (metric or "chamfer").strip().lower()
-    scale_name = (scale or "board").strip().lower()
-    if metric_name not in COMPARE_METRICS:
-        raise HTTPException(status_code=400, detail="metric은 chamfer 또는 xor 이어야 합니다.")
-    if scale_name not in SCALE_MODES:
-        raise HTTPException(status_code=400, detail="scale은 board 또는 hardware 이어야 합니다.")
-    contents = await file.read()
-    nparr = np.frombuffer(contents, np.uint8)
-    image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-
+def decode_image(contents):
+    image = cv2.imdecode(np.frombuffer(contents, np.uint8), cv2.IMREAD_COLOR)
     if image is None:
         raise HTTPException(status_code=400, detail="Invalid image")
+    return image
 
-    # board: 사진 속 체커보드로 mm 변환. hardware: 고정 기구 실측은 아직 없음.
+
+def jpeg_data_url(gray):
+    ok, encoded = cv2.imencode(".jpg", gray, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    if not ok:
+        return None
+    return "data:image/jpeg;base64," + base64.b64encode(encoded.tobytes()).decode("ascii")
+
+
+def analyze_view(image, scale_name):
     homography = homography_from_board(image) if scale_name == "board" else None
-
-    nail_masks = backend.segment(image)
+    nail_masks = SEG_BACKENDS[scale_name].segment(image)
     if not nail_masks:
         raise HTTPException(status_code=400, detail="Nail detection failed")
 
-    results = []
+    items = []
     for nail_mask in nail_masks:
-        best_shape = None
-        min_dist = None
-        formatted_contours = []
-        preview = None
-
-        if nail_mask.contour is not None and len(nail_mask.contour) >= 3:
-            formatted_contours = [format_contour(nail_mask.contour)]
-            # 분류 모델 입력: 폴리곤으로 원본을 잘라 검은 배경·그레이로 만든다. 정렬은 하지 않는다.
-            gray_nail = prepare_nail_gray(image, nail_mask.contour)
-            if gray_nail is not None:
-                ok, encoded = cv2.imencode(".jpg", gray_nail, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
-                if ok:
-                    preview = "data:image/jpeg;base64," + base64.b64encode(encoded.tobytes()).decode("ascii")
-                try:
-                    best_shape, min_dist = classify_contour(nail_mask.contour, metric_name)
-                except ValueError:
-                    best_shape = None
-                    min_dist = None
+        contour = nail_mask.contour
+        gray = None
+        contours = []
+        order_x = 0.0
+        if contour is not None and len(contour) >= 3:
+            points = np.asarray(contour, dtype=np.float32).reshape(-1, 2)
+            order_x = float(points[:, 0].mean())
+            contours = [format_contour(contour)]
+            gray = prepare_nail_gray(image, contour)
 
         length_mm = None
         width_mm = None
@@ -166,14 +136,55 @@ async def measure_nails(
         # else:
         #     하드웨어 mm는 아직 없다. 세그·전처리·형태만 반환한다.
 
-        results.append(MeasurementResult(
-            length_mm=length_mm,
-            width_mm=width_mm,
-            shape=best_shape,
-            shape_score=round(min_dist, 4) if min_dist is not None else None,
-            metric=metric_name,
-            contours=formatted_contours,
-            preview=preview,
-        ))
+        items.append({
+            "x": order_x,
+            "gray": gray,
+            "result": NailView(
+                length_mm=length_mm,
+                width_mm=width_mm,
+                contours=contours,
+                preview=jpeg_data_url(gray) if gray is not None else None,
+            ),
+        })
 
-    return results
+    if not items:
+        raise HTTPException(status_code=400, detail="Nail measurement failed")
+    items.sort(key=lambda item: item["x"])
+    return items
+
+
+def assign_shapes(front_items, side_items, classifier):
+    for front_item, side_item in zip(front_items, side_items):
+        if front_item["gray"] is None or side_item["gray"] is None:
+            continue
+        shape = classifier.predict(front_item["gray"], side_item["gray"])
+        for item in (front_item, side_item):
+            item["result"].shape = shape
+
+
+@router.post("/measure", response_model=MeasureResponse)
+async def measure_nails(
+    file: UploadFile = File(...),
+    side: Optional[UploadFile] = File(None),
+    scale: str = Form("board"),
+    group: str = Form("other"),
+):
+    scale_name = (scale or "board").strip().lower()
+    group_name = (group or "other").strip().lower()
+    if scale_name not in SCALE_MODES:
+        raise HTTPException(status_code=400, detail="scale은 board 또는 hardware 이어야 합니다.")
+    if group_name not in FINGER_GROUPS:
+        raise HTTPException(status_code=400, detail="group은 thumb 또는 other 이어야 합니다.")
+
+    front_image = decode_image(await file.read())
+    front_items = analyze_view(front_image, scale_name)
+    side_items = None
+    if side is not None and side.filename:
+        side_image = decode_image(await side.read())
+        side_items = analyze_view(side_image, scale_name)
+        assign_shapes(front_items, side_items, FINGER_GROUPS[group_name])
+
+    return MeasureResponse(
+        front=[item["result"] for item in front_items],
+        side=[item["result"] for item in side_items] if side_items is not None else None,
+    )
