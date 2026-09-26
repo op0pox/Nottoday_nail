@@ -10,9 +10,12 @@ LabelMe json 폴리곤으로 손톱을 잘라 검은 배경·그레이로 저장
 파일명:
   순번_손_손가락[_side]
   손: L, R, LR(양손). LF는 LR 오타로 본다.
-  _side: 측면. 없으면 정면.
-  _4F: 네 손가락 정면을 한 장에 촬영. LR_4F는 양손이라 폴리곤 8개.
-  LR_손가락: 양손의 같은 손가락. 폴리곤은 최대 2개.
+  _side: 측면. 없으면 정면. 양손이어도 측면 규칙은 정면과 같다.
+  LR: 양손을 한 장에 촬영.
+    LR_4F: 양손 네 손가락. 왼쪽부터 05 04 03 02 02 03 04 05 로 잘라
+            003_L_05, 003_R_02 처럼 손과 번호를 나눠 저장한다.
+    LR_손가락: 같은 번호 두 장. 왼쪽 폴리곤이 왼손, 오른쪽 폴리곤이 오른손.
+            폴리곤은 2개이고 003_L_01, 003_R_01 처럼 저장한다.
 
 자를 때 왼쪽부터:
   왼손 L: 05 04 03 02
@@ -20,12 +23,18 @@ LabelMe json 폴리곤으로 손톱을 잘라 검은 배경·그레이로 저장
   양손 LR: 05 04 03 02 02 03 04 05
   새끼손가락=05, 검지=02, 엄지=01
 
-출력 파일명:
+출력:
+  원본은 사람 폴더까지 재귀로 찾는다.
+  결과는 사람별 폴더를 만들지 않고 TARGET_FOLDER_DIR 안에 파일만 모아 둔다.
+  순번이 파일명에 있으므로 이름순 정렬로 사람이 모인다.
   순번_손_손가락_front_nail.jpg
   순번_손_손가락_side_nail.jpg
   이름순으로 정렬하면 같은 손가락의 정면, 측면이 붙는다.
+  원본에 손가락이 빠지지 않았으면 한 사람은 정면 10장 + 측면 10장 = 20장이다.
+  왼손·오른손 각각 엄지(01)와 02 03 04 05.
 
-크롭 뒤 손톱이 살짝 기울어 있으면, 긴 축이 세로가 되도록 한 번 더 바로잡는다.
+크롭 뒤 길쭉한 손톱은 긴 축이 세로가 되도록 한 번 더 바로잡는다.
+  둥근 손톱은 축이 흔들려서 돌리지 않는다.
 """
 import json
 import os
@@ -39,6 +48,7 @@ ORIGIN_FOLDER_DIR = r"C:\Users\USER\Downloads\파일정리"
 TARGET_FOLDER_DIR = r"C:\Users\USER\Downloads\파일정리_nail"
 
 PADDING_RATIO = 0.05
+ELONGATION_MIN = 1.35
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 LEFT_ORDER = ("05", "04", "03", "02")
 RIGHT_ORDER = ("02", "03", "04", "05")
@@ -98,34 +108,57 @@ def crop_on_black(bgr, polygon):
     return cv2.cvtColor(black, cv2.COLOR_BGR2GRAY)
 
 
-def straighten_gray(gray, max_degrees=20):
-    """크롭된 손톱의 긴 축을 세로로 맞춘다. 이미 11자에 가까우면 살짝만 돌린다."""
+def foreground_up_angle(gray):
+    """긴 축을 세로로 세우는 OpenCV 회전각. 양수는 반시계. 점 위쪽을 유지한다."""
     fg = gray > 15
     ys, xs = np.nonzero(fg)
     if len(xs) < 30:
+        return None
+    pts = np.stack([xs.astype(np.float64), ys.astype(np.float64)], axis=1)
+    centered = pts - pts.mean(axis=0)
+    vals, vecs = np.linalg.eigh(np.cov(centered.T))
+    long_axis = vecs[:, int(np.argmax(vals))]
+    if long_axis[1] > 0:
+        long_axis = -long_axis
+    alpha = float(np.degrees(np.arctan2(long_axis[1], long_axis[0])))
+    angle = alpha + 90.0
+    while angle > 90.0:
+        angle -= 180.0
+    while angle < -90.0:
+        angle += 180.0
+    ratio = float(np.sqrt(float(vals.max()) / max(float(vals.min()), 1e-9)))
+    return angle, ratio
+
+
+def crop_foreground(gray, pad=4):
+    ys, xs = np.nonzero(gray > 15)
+    if len(xs) == 0:
         return gray
-    pts = np.stack([xs, ys], axis=1).astype(np.float32)
-    _center, (rw, rh), angle = cv2.minAreaRect(pts)
-    # minAreaRect 각도는 가로변 기준 [-90, 0). 긴 변이 세로가 되도록 보정각을 고른다.
-    if rw < rh:
-        tilt = angle + 90
-    else:
-        tilt = angle
-    if tilt > 45:
-        tilt -= 90
-    elif tilt < -45:
-        tilt += 90
-    if abs(tilt) < 0.4 or abs(tilt) > max_degrees:
+    top = max(0, int(ys.min()) - pad)
+    left = max(0, int(xs.min()) - pad)
+    bottom = min(gray.shape[0], int(ys.max()) + 1 + pad)
+    right = min(gray.shape[1], int(xs.max()) + 1 + pad)
+    return gray[top:bottom, left:right]
+
+
+def straighten_gray(gray):
+    """길쭉한 손톱의 긴 축을 세로로 맞춘다. 둥근 손톱은 그대로 둔다."""
+    found = foreground_up_angle(gray)
+    if found is None:
+        return gray
+    angle, ratio = found
+    if abs(angle) < 0.4 or ratio < ELONGATION_MIN:
         return gray
     height, width = gray.shape[:2]
-    matrix = cv2.getRotationMatrix2D((width / 2, height / 2), tilt, 1.0)
+    matrix = cv2.getRotationMatrix2D((width / 2, height / 2), angle, 1.0)
     cos = abs(matrix[0, 0])
     sin = abs(matrix[0, 1])
     new_w = int(height * sin + width * cos)
     new_h = int(height * cos + width * sin)
     matrix[0, 2] += (new_w - width) / 2
     matrix[1, 2] += (new_h - height) / 2
-    return cv2.warpAffine(gray, matrix, (new_w, new_h), flags=cv2.INTER_LINEAR, borderValue=0)
+    turned = cv2.warpAffine(gray, matrix, (new_w, new_h), flags=cv2.INTER_LINEAR, borderValue=0)
+    return crop_foreground(turned)
 
 
 def polygons_from_json(path):
@@ -211,14 +244,11 @@ def assign_nails(stem, polygons):
         return items, "한손 4손가락"
 
     if hand == "LR" and finger:
-        if len(ordered) > 2:
-            return [], f"LR_{finger} 폴리곤 {len(ordered)}개 (최대 2개)"
-        if len(ordered) == 2:
-            for side, pts in zip(("L", "R"), ordered):
-                items.append((nail_name(person, side, finger, view), pts))
-            return items, "양손 같은 손가락"
-        items.append((nail_name(person, "L", finger, view), ordered[0]))
-        return items, "양손인데 폴리곤 1개"
+        if len(ordered) != 2:
+            return [], f"LR_{finger} 폴리곤 {len(ordered)}개 (2개 필요, 왼쪽=왼손 오른쪽=오른손)"
+        for side, pts in zip(("L", "R"), ordered):
+            items.append((nail_name(person, side, finger, view), pts))
+        return items, "양손 같은 손가락"
 
     if finger:
         if len(ordered) != 1:
@@ -231,7 +261,53 @@ def assign_nails(stem, polygons):
 
 def save_gray(gray, path):
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    cv2.imwrite(path, gray)
+    ext = os.path.splitext(path)[1] or ".jpg"
+    ok, encoded = cv2.imencode(ext, gray)
+    if not ok:
+        raise RuntimeError(f"이미지 저장 실패: {path}")
+    encoded.tofile(path)
+
+
+def canonical_stem(stem):
+    parsed = parse_stem(stem)
+    if not parsed:
+        return stem
+    person, hand, rest = parsed
+    if hand == "LF":
+        hand = "LR"
+    if rest:
+        return f"{person}_{hand}_{rest}"
+    return f"{person}_{hand}"
+
+
+def image_exists(folder, stem):
+    key = canonical_stem(stem)
+    for name in os.listdir(folder):
+        base, ext = os.path.splitext(name)
+        if ext.lower() in IMAGE_EXTS and os.path.isfile(os.path.join(folder, name)):
+            if canonical_stem(base) == key:
+                return True
+    return False
+
+
+def other_view_exists(folder, person, hand, finger, want_side):
+    """같은 손가락의 반대 촬영이 있으면 참. 양손 한 장(LR)과 4F 정면도 포함한다."""
+    suffix = "_side" if want_side else ""
+    hands = ["LR", "L", "R"] if hand == "LR" else [hand, "LR"]
+    for candidate in hands:
+        if image_exists(folder, f"{person}_{candidate}_{finger}{suffix}"):
+            return True
+    if not want_side and finger in {"02", "03", "04", "05"}:
+        if hand in {"L", "R"} and image_exists(folder, f"{person}_{hand}_4F"):
+            return True
+        if image_exists(folder, f"{person}_LR_4F"):
+            return True
+    return False
+
+
+def nail_parts(nail):
+    person, hand, finger, view, _nail = nail.split("_")
+    return person, hand, finger, view
 
 
 def iter_sources(root):
@@ -242,7 +318,7 @@ def iter_sources(root):
             yield os.path.join(dirpath, name)
 
 
-def process_one(src_path):
+def process_one(src_path, saved):
     name = os.path.basename(src_path)
     stem = os.path.splitext(name)[0]
     json_path = os.path.splitext(src_path)[0] + ".json"
@@ -258,12 +334,54 @@ def process_one(src_path):
         line = f"{name}: 폴리곤 {len(polygons)}개, {how}"
         print(f"  {line}")
         return 0, line
+    folder = os.path.dirname(src_path)
+    is_side = stem.lower().endswith("_side")
+    kept = []
+    missing = []
+    for nail, polygon in assigned:
+        person, hand, finger, _view = nail_parts(nail)
+        if other_view_exists(folder, person, hand, finger, want_side=not is_side):
+            kept.append((nail, polygon))
+        else:
+            other = "측면" if not is_side else "정면"
+            missing.append(f"{name}: 정면/측면 쌍 없음 ({other} {person}_{hand}_{finger} 없음)")
+    for line in missing:
+        print(f"  {line}")
+    if not kept:
+        return 0, "\n".join(missing)
+    assigned = kept
+    if missing:
+        how = how + f", 짝 없는 손가락 {len(missing)}개 건너뜀"
     bgr = load_image(src_path, json_size)
     for nail, polygon in assigned:
         gray = straighten_gray(crop_on_black(bgr, polygon))
         save_gray(gray, os.path.join(TARGET_FOLDER_DIR, f"{nail}.jpg"))
+        saved.append(nail)
     print(f"  {name}: {how} {len(assigned)}개")
-    return len(assigned), None
+    return len(assigned), "\n".join(missing) or None
+
+
+def person_count_lines(saved_names):
+    by_person = {}
+    for name in saved_names:
+        by_person.setdefault(name.split("_")[0], set()).add(name)
+    lines = []
+    for person in sorted(by_person):
+        names = by_person[person]
+        front = sum(name.endswith("_front_nail") for name in names)
+        side = sum(name.endswith("_side_nail") for name in names)
+        missing = []
+        for hand in ("L", "R"):
+            for finger in ("01", "02", "03", "04", "05"):
+                for view in ("front", "side"):
+                    nail = f"{person}_{hand}_{finger}_{view}_nail"
+                    if nail not in names:
+                        missing.append(f"{hand}_{finger}_{view}")
+        if front == 10 and side == 10 and not missing:
+            lines.append(f"{person}: 20장 (정면 10, 측면 10)")
+        else:
+            lines.append(f"{person}: {len(names)}장 (정면 {front}, 측면 {side}) 누락 {', '.join(missing)}")
+    return lines
 
 
 def main():
@@ -275,19 +393,26 @@ def main():
 
     total_crops = 0
     skipped = []
+    saved = []
     for path in sources:
-        crops, reason = process_one(path)
+        crops, reason = process_one(path, saved)
         total_crops += crops
         if reason:
             skipped.append(reason)
 
+    count_lines = person_count_lines(saved)
     log_path = os.path.join(TARGET_FOLDER_DIR, "polygon_skip.txt")
     with open(log_path, "w", encoding="utf-8") as fp:
         if skipped:
             fp.write("\n".join(skipped) + "\n")
         else:
             fp.write("폴리곤 개수가 규칙과 다른 파일 없음\n")
+        fp.write("\n[사람별 장수] 빠짐이 없으면 정면 10 + 측면 10 = 20\n")
+        fp.write("\n".join(count_lines) + "\n")
 
+    print("\n사람별 장수 (빠짐이 없으면 정면 10 + 측면 10 = 20)")
+    for line in count_lines:
+        print(f"  {line}")
     print(f"\n완료: 이미지 {len(sources)}장, 크롭 {total_crops}개")
     print(f"건너뜀 {len(skipped)}장 → {log_path}")
 
