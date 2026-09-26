@@ -103,6 +103,29 @@ def grab_pair():
     return {"front": front_b64, "side": side_b64}
 
 
+def focus_score(frame):
+    h, w = frame.shape[:2]
+    center = frame[h // 4:3 * h // 4, w // 4:3 * w // 4]
+    gray = cv2.cvtColor(center, cv2.COLOR_BGR2GRAY)
+    return cv2.Laplacian(gray, cv2.CV_64F).var()
+
+
+def preview_jpeg():
+    with frame_lock:
+        if latest_front is None or latest_side is None:
+            return None
+        front, side = latest_front, latest_side
+    tiles = []
+    for name, frame in (("front", front), ("side", side)):
+        score = focus_score(frame)
+        small = cv2.resize(frame, (640, 360))
+        cv2.putText(small, "%s focus %.0f" % (name, score), (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        tiles.append(small)
+    ok, buf = cv2.imencode(".jpg", cv2.hconcat(tiles), [int(cv2.IMWRITE_JPEG_QUALITY), 70])
+    return buf.tobytes() if ok else None
+
+
 class Handler(BaseHTTPRequestHandler):
     def _cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -133,6 +156,24 @@ class Handler(BaseHTTPRequestHandler):
                 "front_open": cap0 is not None and cap0.isOpened(),
                 "side_open": cap1 is not None and cap1.isOpened(),
             })
+            return
+        if path == "/preview":
+            self.send_response(200)
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            self.send_header("Cache-Control", "no-cache")
+            self._cors()
+            self.end_headers()
+            try:
+                while not stop_event.is_set():
+                    jpg = preview_jpeg()
+                    if jpg is not None:
+                        self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\n")
+                        self.wfile.write(b"Content-Length: %d\r\n\r\n" % len(jpg))
+                        self.wfile.write(jpg)
+                        self.wfile.write(b"\r\n")
+                    time.sleep(0.1)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
             return
         if path == "/shot":
             pair = grab_pair()
