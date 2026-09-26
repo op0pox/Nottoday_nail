@@ -18,14 +18,8 @@ MARKER_MM = float(os.getenv("MARKER_MM"))
 CAMERA_HEIGHT_MM = float(os.getenv("CAMERA_HEIGHT_MM"))
 NAIL_HEIGHT_MM = float(os.getenv("NAIL_HEIGHT_MM"))
 
-# IMX219 고정 거리. px_per_mm = 초점거리(px) / 거리(mm). 1280x720은 2x2 비닝이라 초점거리가 절반이다.
-FOCAL_PX_FULL = 3.04 * 1000.0 / 1.12
-SENSOR_FOCALS = {
-    (3264, 2464): FOCAL_PX_FULL,
-    (1920, 1080): FOCAL_PX_FULL,
-    (1640, 1232): FOCAL_PX_FULL / 2,
-    (1280, 720): FOCAL_PX_FULL / 2,
-}
+# Jetson은 IMX219 mode 4, 1280x720만 받는다. 2x2 비닝이라 초점(px)은 풀 해상도의 절반.
+FOCAL_PX = 3.04 * 1000.0 / 1.12 / 2
 
 
 def env_cm(name, default):
@@ -111,16 +105,14 @@ def homography_from_board(image):
     return homography
 
 
-def homography_from_distance(image, distance_cm):
+def homography_from_distance(distance_cm, camera):
     if distance_cm <= 0:
         raise HTTPException(status_code=400, detail="하드웨어 거리는 0보다 커야 합니다.")
-    height, width = image.shape[:2]
-    focal_px = SENSOR_FOCALS.get((width, height)) or SENSOR_FOCALS.get((height, width))
-    if focal_px is None:
-        supported = ", ".join("%dx%d" % (w, h) for w, h in SENSOR_FOCALS)
-        raise HTTPException(status_code=400, detail="지원하지 않는 해상도입니다: %dx%d (%s)" % (width, height, supported))
-    px_per_mm = focal_px / (distance_cm * 10.0)
+    px_per_mm = FOCAL_PX / (distance_cm * 10.0)
     scale = 1.0 / px_per_mm
+    # 같은 식이면 정면만 실측의 절반이 나온다.
+    if camera == "front":
+        scale *= 2
     homography = np.array([[scale, 0.0, 0.0], [0.0, scale, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
     return homography, distance_cm * 10.0
 
@@ -146,7 +138,7 @@ def analyze_view(image, scale_name, camera):
         nail_height_mm = NAIL_HEIGHT_MM
     else:
         # 거리는 손톱 표면까지라서 플레이트 시차 보정은 더하지 않는다.
-        homography, camera_height_mm = homography_from_distance(image, HARDWARE_DISTANCE_CM[camera])
+        homography, camera_height_mm = homography_from_distance(HARDWARE_DISTANCE_CM[camera], camera)
         nail_height_mm = 0.0
     nail_masks = SEG_BACKENDS[scale_name].segment(image)
     if not nail_masks:
