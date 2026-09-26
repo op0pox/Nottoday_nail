@@ -36,6 +36,7 @@ Fast Api/nail_shape/*
 !Training/seg_test.py
 !Training/cls_train.py
 !Training/cls_test.py
+!Training/sample_switch.csv
 
 # 엑셀파일 제외
 손톱데이터셋목록.xlsx
