@@ -18,4 +18,4 @@ python3 capture_server.py
 - `GET http://192.168.55.1:8080/health`
 - `GET http://192.168.55.1:8080/shot` → `{ "front": "<jpeg base64>", "side": "<jpeg base64>" }`
 
-센서와 전송 이미지는 IMX219 mode 4(1280x720, 60fps)입니다. GStreamer `nvarguscamerasrc`입니다. 포트 8080이 막혀 있으면 열어 둡니다.
+센서와 전송 이미지는 IMX219 mode 4(1280x720, 60fps)입니다. GStreamer `nvarguscamerasrc`이고, 재시작 직후 프레임이 밀리지 않게 temporal NR과 edge enhancement는 꺼 둡니다. 서버가 뜨기 전에 두 카메라를 몇 장 읽어 버리고, 촬영 때는 정면·측면을 같이 읽습니다. 포트 8080이 막혀 있으면 열어 둡니다.
