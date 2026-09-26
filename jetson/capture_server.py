@@ -15,8 +15,9 @@ PORT = 8080
 WIDTH, HEIGHT = 1280, 720
 FPS = 30
 SENSOR_MODE = 4
-FRONT_ID = 0
-SIDE_ID = 1
+# sensor 0은 옆모습(측면), sensor 1은 위에서 본 손톱(정면)이다.
+SIDE_ID = 0
+FRONT_ID = 1
 JPEG_QUALITY = 90
 
 read_lock = threading.Lock()
@@ -116,7 +117,7 @@ def preview_jpeg():
             return None
         front, side = latest_front, latest_side
     tiles = []
-    for name, frame in (("front", front), ("side", side)):
+    for name, frame in (("side", side), ("front", front)):
         score = focus_score(frame)
         small = cv2.resize(frame, (640, 360))
         cv2.putText(small, "%s focus %.0f" % (name, score), (10, 30),

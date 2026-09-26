@@ -1,6 +1,6 @@
 # jetson
 
-Jetson Nano에서 CSI 두 대(정면 sensor 0, 측면 sensor 1)로 한 프레임씩 찍어 노트북 브라우저에 넘깁니다. 세그·측정은 노트북 FastAPI가 합니다.
+Jetson Nano에서 CSI 두 대(측면 sensor 0, 정면 sensor 1)로 한 프레임씩 찍어 노트북 브라우저에 넘깁니다. 세그·측정은 노트북 FastAPI가 합니다.
 
 이 보드에는 이 폴더만 받습니다.
 
@@ -17,6 +17,6 @@ python3 capture_server.py
 
 - `GET http://192.168.55.1:8080/health`
 - `GET http://192.168.55.1:8080/shot` → `{ "front": "<jpeg base64>", "side": "<jpeg base64>" }`
-- `GET http://192.168.55.1:8080/preview` → 정면·측면을 나란히 보여주는 MJPEG. 화면 가운데 Laplacian 분산이 `focus` 숫자로 찍힌다. 같은 장면을 두고 렌즈를 돌려 숫자가 가장 클 때가 초점이다. 시연 중 `/shot`이 느리면 이 탭은 닫는다.
+- `GET http://192.168.55.1:8080/preview` → 왼쪽 측면, 오른쪽 정면을 보여주는 MJPEG. 화면 가운데 Laplacian 분산이 `focus` 숫자로 찍힌다. 같은 장면을 두고 렌즈를 돌려 숫자가 가장 클 때가 초점이다. 시연 중 `/shot`이 느리면 이 탭은 닫는다.
 
 전송 이미지는 IMX219 mode 4(1280x720)를 30fps로 받습니다. 60fps로 두 대를 열면 두 번째 카메라가 오래 멈추고, 모드를 비우면 해상도 탐색이 느립니다. temporal NR과 edge enhancement는 꺼 둡니다. 두 카메라를 동시에 열고, 첫 프레임이 들어오면 터미널에 `준비완료`가 찍힙니다. 포트 8080이 막혀 있으면 열어 둡니다.

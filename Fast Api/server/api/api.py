@@ -213,7 +213,8 @@ async def measure_nails(
     if side is not None and side.filename:
         side_image = decode_image(await side.read())
         side_items = analyze_view(side_image, scale_name, "side")
-        assign_shapes(front_items, side_items, FINGER_GROUPS[group_name])
+        # 왼쪽(file)이 측면, 오른쪽(side)이 정면이다. 분류기는 정면을 먼저 받는다.
+        assign_shapes(side_items, front_items, FINGER_GROUPS[group_name])
 
     return MeasureResponse(
         front=[item["result"] for item in front_items],
