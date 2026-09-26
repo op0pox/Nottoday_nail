@@ -149,15 +149,12 @@ async def measure_nails(
         #     nail_height_mm=NAIL_HEIGHT_MM,
         # )
 
-        if measured:
-            results.append(MeasurementResult(
-                length_mm=round(measured["length_mm"], 2),
-                width_mm=round(measured["width_mm"], 2) if measured.get("width_mm") is not None else None,
-                shape=best_shape,
-                shape_score=round(min_dist, 4) if min_dist is not None else None,
-                metric=metric_name,
-                contours=formatted_contours,
-                preview=preview,
-            ))
+        results.append(MeasurementResult(
+            shape=best_shape,
+            shape_score=round(min_dist, 4) if min_dist is not None else None,
+            metric=metric_name,
+            contours=formatted_contours,
+            preview=preview,
+        ))
 
     return results
