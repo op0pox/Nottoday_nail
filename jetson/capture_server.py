@@ -17,6 +17,13 @@ SENSOR_MODE = 2
 SIDE_ID = 0
 FRONT_ID = 1
 JPEG_QUALITY = 90
+# LED가 프레임에 들어오면 자동 노출이 그 밝기에 맞춰 손톱이 어둡게 나온다.
+EXPOSURE_COMPENSATION = 2.0
+# left top right bottom weight. 측면은 오른쪽 LED를 측광에서 뺀다.
+AE_REGION = {
+    SIDE_ID: "0 0 1400 1080 1",
+    FRONT_ID: "400 480 1520 1080 1",
+}
 
 read_lock = threading.Lock()
 frame_lock = threading.Lock()
@@ -30,11 +37,11 @@ pump_thread = None
 
 def gstreamer_pipeline(sensor_id):
     return (
-        "nvarguscamerasrc sensor-id=%d sensor-mode=%d ! "
+        "nvarguscamerasrc sensor-id=%d sensor-mode=%d exposurecompensation=%.1f aeregion=\"%s\" ! "
         "video/x-raw(memory:NVMM), width=%d, height=%d, format=NV12, framerate=%d/1 ! "
         "nvvidconv ! video/x-raw, width=%d, height=%d, format=BGRx ! "
         "videoconvert ! video/x-raw, format=BGR ! appsink"
-        % (sensor_id, SENSOR_MODE, WIDTH, HEIGHT, FPS, WIDTH, HEIGHT)
+        % (sensor_id, SENSOR_MODE, EXPOSURE_COMPENSATION, AE_REGION[sensor_id], WIDTH, HEIGHT, FPS, WIDTH, HEIGHT)
     )
 
 

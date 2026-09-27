@@ -18,21 +18,38 @@ MARKER_MM = float(os.getenv("MARKER_MM"))
 CAMERA_HEIGHT_MM = float(os.getenv("CAMERA_HEIGHT_MM"))
 NAIL_HEIGHT_MM = float(os.getenv("NAIL_HEIGHT_MM"))
 
-# Jetson은 IMX219 mode 4, 1280x720만 받는다. 2x2 비닝이라 초점(px)은 풀 해상도의 절반.
-FOCAL_PX = 3.04 * 1000.0 / 1.12 / 2
+# feat/nano-capture 의 측면 식. 1920x1080은 크롭이라 초점(px)을 나누지 않는다.
+FOCAL_PX_FULL = 3.04 * 1000.0 / 1.12
+SENSOR_FOCALS = {
+    (3264, 2464): FOCAL_PX_FULL,
+    (1920, 1080): FOCAL_PX_FULL,
+    (1640, 1232): FOCAL_PX_FULL / 2,
+    (1280, 720): FOCAL_PX_FULL / 2,
+}
 
 
-def env_cm(name, default):
+def env_float(name, default):
     raw = os.getenv(name)
     if raw is None or not str(raw).strip():
         return default
     return float(raw)
 
 
-# 렌즈~손톱 표면. 정면 10.5cm, 측면 7.0cm. 비어 있으면 이 기본값을 쓴다.
-HARDWARE_DISTANCE_CM = {
-    "front": env_cm("FRONT_DISTANCE_CM", 10.5),
-    "side": env_cm("SIDE_DISTANCE_CM", 7.0),
+# 측면은 렌즈~손톱 7.0cm. 정면은 아래 실측선으로 배율을 정한다.
+SIDE_DISTANCE_CM = env_float("SIDE_DISTANCE_CM", 7.0)
+
+# 정면 원본 1920x1080을 1024x576으로 줄인 사진에서 잰 선.
+# 세로(빨강) 131px = 14mm, 가로(파랑) 87px = 9.5mm.
+FRONT_REF_SIZE = (1024, 576)
+FRONT_LENGTH_PX = 131.0
+FRONT_LENGTH_MM = 14.0
+FRONT_WIDTH_PX = 87.0
+FRONT_WIDTH_MM = 9.5
+
+# 식 뒤에 더하는 mm. 비우면 0.
+HARDWARE_OFFSET_MM = {
+    "front": (env_float("FRONT_LENGTH_OFFSET_MM", 0.0), env_float("FRONT_WIDTH_OFFSET_MM", 0.0)),
+    "side": (env_float("SIDE_LENGTH_OFFSET_MM", 0.0), env_float("SIDE_WIDTH_OFFSET_MM", 0.0)),
 }
 
 router = APIRouter(prefix="/api")
@@ -105,16 +122,24 @@ def homography_from_board(image):
     return homography
 
 
-def homography_from_distance(distance_cm, camera):
+def homography_from_side(image, distance_cm):
     if distance_cm <= 0:
         raise HTTPException(status_code=400, detail="하드웨어 거리는 0보다 커야 합니다.")
-    px_per_mm = FOCAL_PX / (distance_cm * 10.0)
-    scale = 1.0 / px_per_mm
-    # 같은 식이면 정면만 실측의 절반이 나온다.
-    if camera == "front":
-        scale *= 2
-    homography = np.array([[scale, 0.0, 0.0], [0.0, scale, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
-    return homography, distance_cm * 10.0
+    height, width = image.shape[:2]
+    focal_px = SENSOR_FOCALS.get((width, height)) or SENSOR_FOCALS.get((height, width))
+    if focal_px is None:
+        supported = ", ".join("%dx%d" % (w, h) for w, h in SENSOR_FOCALS)
+        raise HTTPException(status_code=400, detail="지원하지 않는 해상도입니다: %dx%d (%s)" % (width, height, supported))
+    scale = (distance_cm * 10.0) / focal_px
+    return np.array([[scale, 0.0, 0.0], [0.0, scale, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+
+
+def homography_from_front(image):
+    height, width = image.shape[:2]
+    ref_w, ref_h = FRONT_REF_SIZE
+    scale_x = FRONT_WIDTH_MM / (FRONT_WIDTH_PX * width / ref_w)
+    scale_y = FRONT_LENGTH_MM / (FRONT_LENGTH_PX * height / ref_h)
+    return np.array([[scale_x, 0.0, 0.0], [0.0, scale_y, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
 
 
 def decode_image(contents):
@@ -138,7 +163,8 @@ def analyze_view(image, scale_name, camera):
         nail_height_mm = NAIL_HEIGHT_MM
     else:
         # 거리는 손톱 표면까지라서 플레이트 시차 보정은 더하지 않는다.
-        homography, camera_height_mm = homography_from_distance(HARDWARE_DISTANCE_CM[camera], camera)
+        homography = homography_from_front(image) if camera == "front" else homography_from_side(image, SIDE_DISTANCE_CM)
+        camera_height_mm = 0.0
         nail_height_mm = 0.0
     nail_masks = SEG_BACKENDS[scale_name].segment(image)
     if not nail_masks:
@@ -164,8 +190,9 @@ def analyze_view(image, scale_name, camera):
         )
         if not measured:
             continue
-        length_mm = round(measured["length_mm"], 2)
-        width_mm = round(measured["width_mm"], 2) if measured.get("width_mm") is not None else None
+        length_offset, width_offset = HARDWARE_OFFSET_MM[camera] if scale_name == "hardware" else (0.0, 0.0)
+        length_mm = round(measured["length_mm"] + length_offset, 2)
+        width_mm = round(measured["width_mm"] + width_offset, 2) if measured.get("width_mm") is not None else None
 
         items.append({
             "x": order_x,
@@ -207,16 +234,16 @@ async def measure_nails(
     if group_name not in FINGER_GROUPS:
         raise HTTPException(status_code=400, detail="group은 thumb 또는 other 이어야 합니다.")
 
-    front_image = decode_image(await file.read())
-    front_items = analyze_view(front_image, scale_name, "front")
-    side_items = None
+    # file(왼쪽)은 측면, side(오른쪽)은 정면. 응답 키는 화면 순서 그대로다.
+    left_image = decode_image(await file.read())
+    left_items = analyze_view(left_image, scale_name, "side")
+    right_items = None
     if side is not None and side.filename:
-        side_image = decode_image(await side.read())
-        side_items = analyze_view(side_image, scale_name, "side")
-        # 왼쪽(file)이 측면, 오른쪽(side)이 정면이다. 분류기는 정면을 먼저 받는다.
-        assign_shapes(side_items, front_items, FINGER_GROUPS[group_name])
+        right_image = decode_image(await side.read())
+        right_items = analyze_view(right_image, scale_name, "front")
+        assign_shapes(right_items, left_items, FINGER_GROUPS[group_name])
 
     return MeasureResponse(
-        front=[item["result"] for item in front_items],
-        side=[item["result"] for item in side_items] if side_items is not None else None,
+        front=[item["result"] for item in left_items],
+        side=[item["result"] for item in right_items] if right_items is not None else None,
     )
