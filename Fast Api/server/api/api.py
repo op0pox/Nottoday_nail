@@ -46,6 +46,12 @@ FRONT_LENGTH_MM = 14.0
 FRONT_WIDTH_PX = 87.0
 FRONT_WIDTH_MM = 9.5
 
+# 실측으로 맞춘 영점(mm). 길이, 폭 순. env offset은 이 위에 더한다.
+ZERO_MM = {
+    "front": (4.0, 2.3),
+    "side": (4.7, 1.4),
+}
+
 # 식 뒤에 더하는 mm. 비우면 0.
 HARDWARE_OFFSET_MM = {
     "front": (env_float("FRONT_LENGTH_OFFSET_MM", 0.0), env_float("FRONT_WIDTH_OFFSET_MM", 0.0)),
@@ -190,9 +196,14 @@ def analyze_view(image, scale_name, camera):
         )
         if not measured:
             continue
-        length_offset, width_offset = HARDWARE_OFFSET_MM[camera] if scale_name == "hardware" else (0.0, 0.0)
-        length_mm = round(measured["length_mm"] + length_offset, 2)
-        width_mm = round(measured["width_mm"] + width_offset, 2) if measured.get("width_mm") is not None else None
+        if scale_name == "hardware":
+            length_bias, width_bias = ZERO_MM[camera]
+            length_offset, width_offset = HARDWARE_OFFSET_MM[camera]
+        else:
+            length_bias, width_bias = 0.0, 0.0
+            length_offset, width_offset = 0.0, 0.0
+        length_mm = round(measured["length_mm"] + length_bias + length_offset, 2)
+        width_mm = round(measured["width_mm"] + width_bias + width_offset, 2) if measured.get("width_mm") is not None else None
 
         items.append({
             "x": order_x,

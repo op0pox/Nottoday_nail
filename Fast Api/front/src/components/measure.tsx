@@ -2,7 +2,7 @@ import React, { useState, useRef } from 'react';
 
 const JETSON_URL = import.meta.env.VITE_JETSON_URL as string | undefined;
 const SEG_ATTEMPTS = 20;
-const SEG_RETRY_MS = 500;
+const SEG_RETRY_MS = 200;
 const SEG_FAIL = 'Nail detection failed';
 
 function sleep(ms: number) {
