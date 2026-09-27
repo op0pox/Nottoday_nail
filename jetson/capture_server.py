@@ -27,6 +27,78 @@ AE_REGION = {
 
 read_lock = threading.Lock()
 frame_lock = threading.Lock()
+display_lock = threading.Lock()
+latest_display = {"views": []}
+
+USER_PAGE = """<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>손톱</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; color: #fff; font-family: sans-serif; }
+  main { min-height: 100%; display: flex; align-items: center; justify-content: center; gap: 64px; }
+  .card { text-align: center; }
+  img { width: 420px; height: 420px; object-fit: contain; background: #000; }
+  h2 { font-size: 36px; font-weight: 500; margin: 0 0 16px; }
+  .mm { font-size: 36px; margin-top: 20px; }
+  .shape { font-size: 64px; margin-top: 12px; }
+  .wait { font-size: 48px; }
+</style>
+</head>
+<body>
+<main id="root"><p class="wait">측정 대기</p></main>
+<script>
+var last = "";
+function render(data) {
+  var raw = JSON.stringify(data);
+  if (raw === last) return;
+  last = raw;
+  var root = document.getElementById("root");
+  var views = (data && data.views) || [];
+  var cards = [];
+  views.forEach(function (view) {
+    (view.items || []).forEach(function (item) { cards.push({ label: view.label, item: item }); });
+  });
+  if (!cards.length) {
+    root.innerHTML = '<p class="wait">측정 대기</p>';
+    return;
+  }
+  root.innerHTML = "";
+  cards.forEach(function (card) {
+    var el = document.createElement("div");
+    el.className = "card";
+    var title = document.createElement("h2");
+    title.textContent = card.label || "";
+    el.appendChild(title);
+    if (card.item.preview) {
+      var img = document.createElement("img");
+      img.src = card.item.preview;
+      img.alt = card.label || "전처리";
+      el.appendChild(img);
+    }
+    var mm = document.createElement("div");
+    mm.className = "mm";
+    mm.textContent = "길이 " + (card.item.length_mm == null ? "-" : card.item.length_mm) + "mm / 폭 " + (card.item.width_mm ? card.item.width_mm + "mm" : "측정 불가");
+    el.appendChild(mm);
+    if (card.item.shape) {
+      var shape = document.createElement("div");
+      shape.className = "shape";
+      shape.textContent = card.item.shape + "형입니다";
+      el.appendChild(shape);
+    }
+    root.appendChild(el);
+  });
+}
+function tick() {
+  fetch("/display").then(function (r) { return r.json(); }).then(render).catch(function () {});
+}
+tick();
+setInterval(tick, 500);
+</script>
+</body>
+</html>
+"""
 stop_event = threading.Event()
 cap0 = None
 cap1 = None
@@ -124,7 +196,7 @@ def preview_jpeg():
 class Handler(BaseHTTPRequestHandler):
     def _cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "*")
 
     def _json(self, code, payload):
@@ -170,6 +242,21 @@ class Handler(BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 pass
             return
+        if path == "/display":
+            with display_lock:
+                payload = latest_display
+            self._json(200, payload)
+            return
+        if path == "/screen":
+            body = USER_PAGE.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
+            self._cors()
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if path == "/shot":
             pair = grab_pair()
             if pair is None:
@@ -178,6 +265,25 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, pair)
             return
         self._json(404, {"detail": "not found"})
+
+    def do_POST(self):
+        global latest_display
+        path = self.path.split("?", 1)[0]
+        if path != "/display":
+            self._json(404, {"detail": "not found"})
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        try:
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        except (ValueError, UnicodeError):
+            self._json(400, {"detail": "잘못된 화면 데이터입니다."})
+            return
+        if not isinstance(payload, dict) or not isinstance(payload.get("views"), list):
+            self._json(400, {"detail": "views 가 필요합니다."})
+            return
+        with display_lock:
+            latest_display = payload
+        self._json(200, {"ok": True})
 
     def log_message(self, fmt, *args):
         return

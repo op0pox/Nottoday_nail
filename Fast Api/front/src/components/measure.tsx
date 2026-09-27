@@ -90,6 +90,30 @@ async function postMeasure(
   }
 }
 
+async function pushUserDisplay(views: { label: string; results: MeasureResult[] | null }[]) {
+  if (!JETSON_URL) return;
+  const body = {
+    views: views.map((view) => ({
+      label: view.label,
+      items: (view.results ?? []).map((res) => ({
+        preview: res.preview ?? null,
+        length_mm: res.length_mm ?? null,
+        width_mm: res.width_mm ?? null,
+        shape: res.shape ?? null,
+      })),
+    })),
+  };
+  try {
+    await fetch(`${JETSON_URL}/display`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    // HDMI 화면이 없어도 운영자 측정은 그대로 둔다.
+  }
+}
+
 function ResultList({ results }: { results: MeasureResult[] }) {
   return (
     <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', justifyContent: 'center' }}>
@@ -161,6 +185,11 @@ export default function NailMeasurement() {
     setMeasurementResults(measured.payload?.front ?? null);
     setErrorMessage(measured.error);
     setBusy(false);
+    if (measured.payload) {
+      const views = [{ label: '측면', results: measured.payload.front }];
+      if (measured.payload.side && sideFile) views.push({ label: '정면', results: measured.payload.side });
+      void pushUserDisplay(views);
+    }
     if (measured.payload?.side && sideFile) {
       const emptySize = { width: 0, height: 0 };
       setShots([
@@ -204,6 +233,10 @@ export default function NailMeasurement() {
             results: index === 0 ? measured.payload!.front : measured.payload!.side,
             error: null,
           })));
+          void pushUserDisplay([
+            { label: '측면', results: measured.payload.front },
+            { label: '정면', results: measured.payload.side },
+          ]);
           return;
         }
         if (measured.error !== SEG_FAIL || attempt === SEG_ATTEMPTS) {
