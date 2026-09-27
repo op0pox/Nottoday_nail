@@ -37,6 +37,17 @@ function errorText(data: { detail?: unknown } | null, fallback: string): string 
   return fallback;
 }
 
+function downloadB64(b64: string, name: string) {
+  const url = URL.createObjectURL(b64ToFile(b64, name));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 function b64ToFile(b64: string, name: string): File {
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
@@ -102,6 +113,7 @@ export default function NailMeasurement() {
   const [measurementResults, setMeasurementResults] = useState<MeasureResult[] | null>(null);
   const [shots, setShots] = useState<ShotView[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
   const [displaySize, setDisplaySize] = useState({ width: 0, height: 0 });
@@ -158,6 +170,7 @@ export default function NailMeasurement() {
     }
     setBusy(true);
     setErrorMessage(null);
+    setNotice(null);
     setMeasurementResults(null);
     try {
       const response = await fetch(`${JETSON_URL}/shot`);
@@ -186,6 +199,32 @@ export default function NailMeasurement() {
       })));
     } catch {
       setShots([]);
+      setErrorMessage('Jetson에 연결하지 못했습니다.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCalibrate = async () => {
+    if (!JETSON_URL) {
+      setErrorMessage('VITE_JETSON_URL이 없습니다.');
+      return;
+    }
+    if (busy) return;
+    setBusy(true);
+    setErrorMessage(null);
+    setNotice(null);
+    try {
+      const response = await fetch(`${JETSON_URL}/shot`);
+      const data = await response.json();
+      if (!response.ok || !data?.front || !data?.side) {
+        setErrorMessage(errorText(data, '캘리브레이션 촬영에 실패했습니다.'));
+        return;
+      }
+      downloadB64(data.side, 'side.jpg');
+      downloadB64(data.front, 'front.jpg');
+      setNotice('측면·정면 원본을 저장했습니다.');
+    } catch {
       setErrorMessage('Jetson에 연결하지 못했습니다.');
     } finally {
       setBusy(false);
@@ -295,12 +334,18 @@ export default function NailMeasurement() {
       )}
 
       {inputMode === 'jetson' && (
-        <button onClick={handleJetsonShot} disabled={busy} style={{ marginBottom: '20px', padding: '10px 30px', cursor: busy ? 'not-allowed' : 'pointer' }}>
-          {busy ? '측정 중' : 'Jetson 촬영'}
-        </button>
+        <div style={{ display: 'flex', gap: '12px', marginBottom: '20px' }}>
+          <button onClick={handleJetsonShot} disabled={busy} style={{ padding: '10px 30px', cursor: busy ? 'not-allowed' : 'pointer' }}>
+            {busy ? '측정 중' : 'Jetson 촬영'}
+          </button>
+          <button onClick={handleCalibrate} disabled={busy} style={{ padding: '10px 30px', cursor: busy ? 'not-allowed' : 'pointer' }}>
+            캘리브레이션
+          </button>
+        </div>
       )}
 
       {errorMessage && <p style={{ marginTop: '16px', color: '#c00' }}>{errorMessage}</p>}
+      {notice && <p style={{ marginTop: '16px' }}>{notice}</p>}
 
       {inputMode === 'file' && shots.length === 0 && Array.isArray(measurementResults) && (
         <div style={{ marginTop: '30px', textAlign: 'center', width: '100%', maxWidth: '720px' }}>

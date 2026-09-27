@@ -10,11 +10,9 @@ import cv2
 
 HOST = "0.0.0.0"
 PORT = 8080
-# IMX219 mode 4는 1280x720. 모드를 비우면 탐색이 느리고, 60fps로 두 대를 열면 두 번째 open이 멈춘다.
-# tnr/ee를 켜 두면 재시작 직후 버퍼가 찰 때까지 첫 프레임이 밀린다.
-WIDTH, HEIGHT = 1280, 720
+WIDTH, HEIGHT = 1920, 1080
 FPS = 30
-SENSOR_MODE = 4
+SENSOR_MODE = 2
 # sensor 0은 옆모습(측면), sensor 1은 위에서 본 손톱(정면)이다.
 SIDE_ID = 0
 FRONT_ID = 1
@@ -32,29 +30,18 @@ pump_thread = None
 
 def gstreamer_pipeline(sensor_id):
     return (
-        "nvarguscamerasrc sensor-id=%d sensor-mode=%d tnr-mode=0 ee-mode=0 ! "
+        "nvarguscamerasrc sensor-id=%d sensor-mode=%d ! "
         "video/x-raw(memory:NVMM), width=%d, height=%d, format=NV12, framerate=%d/1 ! "
         "nvvidconv ! video/x-raw, width=%d, height=%d, format=BGRx ! "
-        "videoconvert ! video/x-raw, format=BGR ! "
-        "appsink drop=true max-buffers=1 sync=false"
+        "videoconvert ! video/x-raw, format=BGR ! appsink"
         % (sensor_id, SENSOR_MODE, WIDTH, HEIGHT, FPS, WIDTH, HEIGHT)
     )
 
 
-def _open_one(sensor_id, out, index):
-    out[index] = cv2.VideoCapture(gstreamer_pipeline(sensor_id), cv2.CAP_GSTREAMER)
-
-
 def open_cameras():
     global cap0, cap1
-    opened = [None, None]
-    front = threading.Thread(target=_open_one, args=(FRONT_ID, opened, 0))
-    side = threading.Thread(target=_open_one, args=(SIDE_ID, opened, 1))
-    front.start()
-    side.start()
-    front.join()
-    side.join()
-    cap0, cap1 = opened
+    cap0 = cv2.VideoCapture(gstreamer_pipeline(FRONT_ID), cv2.CAP_GSTREAMER)
+    cap1 = cv2.VideoCapture(gstreamer_pipeline(SIDE_ID), cv2.CAP_GSTREAMER)
 
 
 def cameras_open():
