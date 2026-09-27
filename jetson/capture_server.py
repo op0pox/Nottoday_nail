@@ -10,15 +10,15 @@ import cv2
 
 HOST = "0.0.0.0"
 PORT = 8080
-WIDTH, HEIGHT = 1920, 1080
+WIDTH, HEIGHT = 1280, 720
 FPS = 30
-SENSOR_MODE = 2
+SENSOR_MODE = 4
 # sensor 0은 옆모습(측면), sensor 1은 위에서 본 손톱(정면)이다.
 SIDE_ID = 0
 FRONT_ID = 1
 JPEG_QUALITY = 90
 # LED가 프레임에 들어오면 자동 노출이 그 밝기에 맞춰 손톱이 어둡게 나온다.
-EXPOSURE_COMPENSATION = 2.0
+EXPOSURE_COMPENSATION = 1.0
 # left top right bottom weight. 측면은 오른쪽 LED를 측광에서 뺀다.
 AE_REGION = {
     SIDE_ID: "0 0 1400 1080 1",
