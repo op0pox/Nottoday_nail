@@ -1,6 +1,13 @@
 import React, { useState, useRef } from 'react';
 
 const JETSON_URL = import.meta.env.VITE_JETSON_URL as string | undefined;
+const SEG_ATTEMPTS = 20;
+const SEG_RETRY_MS = 500;
+const SEG_FAIL = 'Nail detection failed';
+
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 
 type InputMode = 'file' | 'jetson';
 type ScaleMode = 'board' | 'hardware';
@@ -173,30 +180,40 @@ export default function NailMeasurement() {
     setNotice(null);
     setMeasurementResults(null);
     try {
-      const response = await fetch(`${JETSON_URL}/shot`);
-      const data = await response.json();
-      if (!response.ok || !data?.front || !data?.side) {
-        setShots([]);
-        setErrorMessage(errorText(data, 'Jetson 촬영에 실패했습니다.'));
-        return;
+      for (let attempt = 1; attempt <= SEG_ATTEMPTS; attempt += 1) {
+        setNotice(`세그멘테이션 ${attempt}/${SEG_ATTEMPTS}`);
+        const response = await fetch(`${JETSON_URL}/shot`);
+        const data = await response.json();
+        if (!response.ok || !data?.front || !data?.side) {
+          setShots([]);
+          setErrorMessage(errorText(data, 'Jetson 촬영에 실패했습니다.'));
+          return;
+        }
+        const sideShot = b64ToFile(data.side, 'side.jpg');
+        const frontShot = b64ToFile(data.front, 'front.jpg');
+        const emptySize = { width: 0, height: 0 };
+        setShots([
+          { label: '측면', preview: URL.createObjectURL(sideShot), results: null, error: null, imageSize: emptySize, displaySize: emptySize },
+          { label: '정면', preview: URL.createObjectURL(frontShot), results: null, error: null, imageSize: emptySize, displaySize: emptySize },
+        ]);
+        const measured = await postMeasure(sideShot, scaleMode, fingerGroup, frontShot);
+        if (measured.payload) {
+          setNotice(null);
+          setShots((prev) => prev.map((shot, index) => ({
+            ...shot,
+            results: index === 0 ? measured.payload!.front : measured.payload!.side,
+            error: null,
+          })));
+          return;
+        }
+        if (measured.error !== SEG_FAIL || attempt === SEG_ATTEMPTS) {
+          setNotice(null);
+          setErrorMessage(measured.error);
+          setShots((prev) => prev.map((shot) => ({ ...shot, results: null, error: measured.error })));
+          return;
+        }
+        await sleep(SEG_RETRY_MS);
       }
-      const sideShot = b64ToFile(data.side, 'side.jpg');
-      const frontShot = b64ToFile(data.front, 'front.jpg');
-      const emptySize = { width: 0, height: 0 };
-      setShots([
-        { label: '측면', preview: URL.createObjectURL(sideShot), results: null, error: null, imageSize: emptySize, displaySize: emptySize },
-        { label: '정면', preview: URL.createObjectURL(frontShot), results: null, error: null, imageSize: emptySize, displaySize: emptySize },
-      ]);
-      const measured = await postMeasure(sideShot, scaleMode, fingerGroup, frontShot);
-      if (!measured.payload) {
-        setShots((prev) => prev.map((shot) => ({ ...shot, results: null, error: measured.error })));
-        return;
-      }
-      setShots((prev) => prev.map((shot, index) => ({
-        ...shot,
-        results: index === 0 ? measured.payload!.front : measured.payload!.side,
-        error: null,
-      })));
     } catch {
       setShots([]);
       setErrorMessage('Jetson에 연결하지 못했습니다.');
