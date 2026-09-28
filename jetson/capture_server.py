@@ -29,6 +29,9 @@ read_lock = threading.Lock()
 frame_lock = threading.Lock()
 display_lock = threading.Lock()
 latest_display = {"views": []}
+# 마지막 /shot 사진. HDMI 화면(/screen)에 원본 촬영 사진을 바로 띄울 때 쓴다.
+latest_shot = None
+shot_id = 0
 
 USER_PAGE = """<!DOCTYPE html>
 <html lang="ko">
@@ -36,62 +39,108 @@ USER_PAGE = """<!DOCTYPE html>
 <meta charset="utf-8">
 <title>손톱</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #111; color: #fff; font-family: sans-serif; }
-  main { min-height: 100%; display: flex; align-items: center; justify-content: center; gap: 64px; }
-  .card { text-align: center; }
-  img { width: 420px; height: 420px; object-fit: contain; background: #000; }
-  h2 { font-size: 36px; font-weight: 500; margin: 0 0 16px; }
-  .mm { font-size: 36px; margin-top: 20px; }
-  .shape { font-size: 64px; margin-top: 12px; }
-  .wait { font-size: 48px; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0c0f; color: #f2f3f5; font-family: "Noto Sans CJK KR", "Malgun Gothic", sans-serif; }
+  body { display: flex; flex-direction: column; padding: 2.5vh 3vw; gap: 2.5vh; }
+  .label { font-size: 2.2vh; color: #9aa0ab; margin: 0 0 1vh; font-weight: 500; }
+  #shots { display: flex; gap: 2vw; justify-content: center; height: 38vh; }
+  #shots:empty { display: none; }
+  .shot { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; }
+  .shot img { flex: 1; min-height: 0; max-width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #000; border: 1px solid #262a33; border-radius: 12px; }
+  #root { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; gap: 2vh; }
+  .view { display: flex; align-items: center; gap: 1.5vw; }
+  .view h2 { width: 5vw; margin: 0; font-size: 2.6vh; font-weight: 500; color: #9aa0ab; text-align: center; }
+  .cards { flex: 1; display: flex; gap: 1vw; justify-content: center; }
+  .card { flex: 0 1 17vw; display: flex; align-items: center; gap: 1vw; padding: 1.2vh 1vw; background: #16181d; border: 1px solid #262a33; border-radius: 14px; }
+  .card img { width: 13vh; height: 13vh; flex: none; object-fit: contain; background: #000; border-radius: 8px; }
+  .info { flex: 1; min-width: 0; text-align: left; }
+  .mm { font-size: 2vh; line-height: 1.5; white-space: nowrap; }
+  .shape { display: inline-block; font-size: 2.8vh; font-weight: 700; margin-top: 0.8vh; padding: 0.2vh 1vw; border-radius: 999px; background: #f5c542; color: #0b0c0f; }
+  .wait { font-size: 5vh; color: #9aa0ab; text-align: center; margin: 0; }
 </style>
 </head>
 <body>
+<section id="shots"></section>
 <main id="root"><p class="wait">측정 대기</p></main>
 <script>
 var last = "";
+var lastShot = 0;
+function renderShots(info) {
+  var id = info && info.id;
+  if (!id || id === lastShot) return;
+  lastShot = id;
+  var box = document.getElementById("shots");
+  box.innerHTML = "";
+  [["side", "측면 촬영"], ["front", "정면 촬영"]].forEach(function (pair) {
+    var el = document.createElement("div");
+    el.className = "shot";
+    var title = document.createElement("p");
+    title.className = "label";
+    title.textContent = pair[1];
+    el.appendChild(title);
+    var img = document.createElement("img");
+    img.src = "/last_shot/" + pair[0] + ".jpg?id=" + id;
+    img.alt = pair[1];
+    el.appendChild(img);
+    box.appendChild(el);
+  });
+}
 function render(data) {
   var raw = JSON.stringify(data);
   if (raw === last) return;
   last = raw;
   var root = document.getElementById("root");
   var views = (data && data.views) || [];
-  var cards = [];
-  views.forEach(function (view) {
-    (view.items || []).forEach(function (item) { cards.push({ label: view.label, item: item }); });
-  });
-  if (!cards.length) {
+  var total = 0;
+  views.forEach(function (view) { total += (view.items || []).length; });
+  if (!total) {
     root.innerHTML = '<p class="wait">측정 대기</p>';
     return;
   }
   root.innerHTML = "";
-  cards.forEach(function (card) {
-    var el = document.createElement("div");
-    el.className = "card";
+  views.forEach(function (view) {
+    var items = view.items || [];
+    if (!items.length) return;
+    var row = document.createElement("section");
+    row.className = "view";
     var title = document.createElement("h2");
-    title.textContent = card.label || "";
-    el.appendChild(title);
-    if (card.item.preview) {
-      var img = document.createElement("img");
-      img.src = card.item.preview;
-      img.alt = card.label || "전처리";
-      el.appendChild(img);
-    }
-    var mm = document.createElement("div");
-    mm.className = "mm";
-    mm.textContent = "길이 " + (card.item.length_mm == null ? "-" : card.item.length_mm) + "mm / 폭 " + (card.item.width_mm ? card.item.width_mm + "mm" : "측정 불가");
-    el.appendChild(mm);
-    if (card.item.shape) {
-      var shape = document.createElement("div");
-      shape.className = "shape";
-      shape.textContent = card.item.shape + "형입니다";
-      el.appendChild(shape);
-    }
-    root.appendChild(el);
+    title.textContent = view.label || "";
+    row.appendChild(title);
+    var list = document.createElement("div");
+    list.className = "cards";
+    items.forEach(function (item) {
+      var el = document.createElement("div");
+      el.className = "card";
+      if (item.preview) {
+        var img = document.createElement("img");
+        img.src = item.preview;
+        img.alt = view.label || "전처리";
+        el.appendChild(img);
+      }
+      var info = document.createElement("div");
+      info.className = "info";
+      var mm = document.createElement("div");
+      mm.className = "mm";
+      mm.appendChild(document.createTextNode("길이 " + (item.length_mm == null ? "-" : item.length_mm) + "mm"));
+      mm.appendChild(document.createElement("br"));
+      mm.appendChild(document.createTextNode("폭 " + (item.width_mm ? item.width_mm + "mm" : "측정 불가")));
+      info.appendChild(mm);
+      if (item.shape) {
+        var shape = document.createElement("div");
+        shape.className = "shape";
+        shape.textContent = item.shape + "형";
+        info.appendChild(shape);
+      }
+      el.appendChild(info);
+      list.appendChild(el);
+    });
+    row.appendChild(list);
+    root.appendChild(row);
   });
 }
 function tick() {
   fetch("/display").then(function (r) { return r.json(); }).then(render).catch(function () {});
+  fetch("/shot_info").then(function (r) { return r.json(); }).then(renderShots).catch(function () {});
 }
 tick();
 setInterval(tick, 500);
@@ -214,6 +263,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        global latest_shot, shot_id
         path = self.path.split("?", 1)[0]
         if path == "/health":
             with frame_lock:
@@ -262,7 +312,31 @@ class Handler(BaseHTTPRequestHandler):
             if pair is None:
                 self._json(503, {"detail": "카메라 프레임을 읽지 못했습니다."})
                 return
+            with display_lock:
+                latest_shot = pair
+                shot_id += 1
             self._json(200, pair)
+            return
+        if path == "/shot_info":
+            with display_lock:
+                current_id = shot_id
+            self._json(200, {"id": current_id})
+            return
+        if path in ("/last_shot/front.jpg", "/last_shot/side.jpg"):
+            with display_lock:
+                shot = latest_shot
+            key = "front" if path.endswith("front.jpg") else "side"
+            if shot is None or not shot.get(key):
+                self._json(404, {"detail": "촬영 사진이 없습니다."})
+                return
+            body = base64.b64decode(shot[key])
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
+            self._cors()
+            self.end_headers()
+            self.wfile.write(body)
             return
         self._json(404, {"detail": "not found"})
 
