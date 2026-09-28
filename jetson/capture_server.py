@@ -47,31 +47,36 @@ USER_PAGE = """<!DOCTYPE html>
 <style>
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: #ffffff; color: #1f2330; font-family: "Noto Sans CJK KR", "Malgun Gothic", sans-serif; }
-  body { display: flex; gap: 2vw; padding: 3vh 2.5vw; }
-  .col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2vh; }
+  body { display: flex; flex-direction: column; gap: 2.5vh; padding: 3vh 2.5vw; }
+  .shots { display: flex; gap: 2vw; }
+  .col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 1.2vh; }
   .col h1 { margin: 0; font-size: 3vh; font-weight: 700; text-align: center; }
-  .shot { height: 48vh; display: flex; align-items: center; justify-content: center; background: #f4f5f7; border: 1px solid #e2e4e9; border-radius: 14px; overflow: hidden; }
+  .shot { height: 44vh; display: flex; align-items: center; justify-content: center; background: #f4f5f7; border: 1px solid #e2e4e9; border-radius: 14px; overflow: hidden; }
   .shot img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
-  .shot .empty, .cards .empty { font-size: 2.4vh; color: #9aa0ab; }
-  .cards { flex: 1; min-height: 0; display: flex; flex-wrap: wrap; align-content: flex-start; justify-content: center; gap: 1.2vh 0.8vw; }
-  .cards .empty { align-self: center; margin-top: 8vh; }
-  .card { width: calc((100% - 3.2vw) / 5); min-width: 0; padding: 1.2vh 0.5vw; text-align: center; background: #ffffff; border: 1px solid #e2e4e9; border-radius: 12px; box-shadow: 0 1px 3px rgba(16, 24, 40, 0.08); }
-  .card img { width: 100%; aspect-ratio: 1 / 1; object-fit: contain; background: #000; border-radius: 8px; display: block; }
-  .mm { font-size: 1.9vh; line-height: 1.5; margin-top: 1vh; white-space: nowrap; }
-  .shape { display: inline-block; font-size: 2.6vh; font-weight: 700; margin-top: 0.8vh; padding: 0.2vh 0.9vw; border-radius: 999px; background: #2f5bd3; color: #ffffff; }
+  .empty { font-size: 2.4vh; color: #9aa0ab; }
+  #pairs { flex: 1; min-height: 0; display: flex; flex-wrap: wrap; align-content: center; justify-content: center; gap: 1.5vh 1vw; }
+  /* 손톱 한 개 = 측면 전처리 | 형태 | 정면 전처리 */
+  .pair { width: 60vw; max-width: 100%; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 2vw; padding: 2vh 2vw; background: #ffffff; border: 1px solid #e2e4e9; border-radius: 18px; box-shadow: 0 1px 3px rgba(16, 24, 40, 0.08); }
+  .view { min-width: 0; text-align: center; }
+  .view .tag { font-size: 2vh; color: #9aa0ab; margin-bottom: 0.8vh; }
+  .view img, .view .noimg { width: 24vh; max-width: 100%; aspect-ratio: 1 / 1; object-fit: contain; background: #000; border-radius: 10px; display: block; margin: 0 auto; }
+  .mm { font-size: 2.6vh; line-height: 1.45; margin-top: 1vh; white-space: nowrap; }
+  .shape { font-size: 4.5vh; font-weight: 700; padding: 0.6vh 1.6vw; border-radius: 999px; background: #2f5bd3; color: #ffffff; white-space: nowrap; }
+  .shape.none { background: #e2e4e9; color: #6b7280; font-weight: 500; font-size: 2.4vh; }
 </style>
 </head>
 <body>
-<section class="col" id="col-side">
-  <h1>측면</h1>
-  <div class="shot" id="shot-side"><span class="empty">촬영 대기</span></div>
-  <div class="cards" id="cards-side"><span class="empty">측정 대기</span></div>
-</section>
-<section class="col" id="col-front">
-  <h1>정면</h1>
-  <div class="shot" id="shot-front"><span class="empty">촬영 대기</span></div>
-  <div class="cards" id="cards-front"><span class="empty">측정 대기</span></div>
-</section>
+<div class="shots">
+  <section class="col">
+    <h1>측면</h1>
+    <div class="shot" id="shot-side"><span class="empty">촬영 대기</span></div>
+  </section>
+  <section class="col">
+    <h1>정면</h1>
+    <div class="shot" id="shot-front"><span class="empty">촬영 대기</span></div>
+  </section>
+</div>
+<main id="pairs"><span class="empty">측정 대기</span></main>
 <script>
 var last = "";
 var shownShot = -1;
@@ -115,36 +120,58 @@ function showShots(info) {
 function viewKey(label) {
   return String(label || "").indexOf("정면") >= 0 ? "front" : "side";
 }
-function renderCards(key, items, emptyText) {
-  var list = document.getElementById("cards-" + key);
-  list.innerHTML = "";
-  if (!items.length) {
-    if (emptyText) setText(list, emptyText);
-    return;
+function viewBox(tag, item) {
+  var box = document.createElement("div");
+  box.className = "view";
+  var t = document.createElement("div");
+  t.className = "tag";
+  t.textContent = tag;
+  box.appendChild(t);
+  if (item && item.preview) {
+    var img = document.createElement("img");
+    img.src = item.preview;
+    img.alt = tag + " 전처리";
+    box.appendChild(img);
+  } else {
+    var no = document.createElement("div");
+    no.className = "noimg";
+    box.appendChild(no);
   }
-  items.forEach(function (item) {
-    var el = document.createElement("div");
-    el.className = "card";
-    if (item.preview) {
-      var img = document.createElement("img");
-      img.src = item.preview;
-      img.alt = "전처리";
-      el.appendChild(img);
-    }
-    var mm = document.createElement("div");
-    mm.className = "mm";
+  var mm = document.createElement("div");
+  mm.className = "mm";
+  if (item) {
     mm.appendChild(document.createTextNode("길이 " + (item.length_mm == null ? "-" : item.length_mm) + "mm"));
     mm.appendChild(document.createElement("br"));
     mm.appendChild(document.createTextNode("폭 " + (item.width_mm ? item.width_mm + "mm" : "측정 불가")));
-    el.appendChild(mm);
-    if (item.shape) {
-      var shape = document.createElement("div");
-      shape.className = "shape";
-      shape.textContent = item.shape + "형";
-      el.appendChild(shape);
-    }
+  } else {
+    mm.textContent = "-";
+  }
+  box.appendChild(mm);
+  return box;
+}
+// 손톱은 한 번에 한 개만 찍는다. 혹시 여러 개가 오면 측면 i번째와 정면 i번째를 같은 손톱으로 본다. 형태는 둘을 함께 보고 나온 하나의 값이라 가운데 한 번만 쓴다.
+function renderPairs(side, front, emptyText) {
+  var list = document.getElementById("pairs");
+  list.innerHTML = "";
+  var count = Math.max(side.length, front.length);
+  if (!count) {
+    if (emptyText) setText(list, emptyText);
+    return;
+  }
+  for (var i = 0; i < count; i += 1) {
+    var s = side[i] || null;
+    var f = front[i] || null;
+    var el = document.createElement("div");
+    el.className = "pair";
+    el.appendChild(viewBox("측면", s));
+    var shape = document.createElement("div");
+    var value = (s && s.shape) || (f && f.shape);
+    shape.className = value ? "shape" : "shape none";
+    shape.textContent = value ? value + "형" : "형태 -";
+    el.appendChild(shape);
+    el.appendChild(viewBox("정면", f));
     list.appendChild(el);
-  });
+  }
 }
 function renderData(data) {
   var raw = JSON.stringify(data);
@@ -154,8 +181,7 @@ function renderData(data) {
   ((data && data.views) || []).forEach(function (view) {
     grouped[viewKey(view.label)] = grouped[viewKey(view.label)].concat(view.items || []);
   });
-  renderCards("side", grouped.side, "측정 대기");
-  renderCards("front", grouped.front, "측정 대기");
+  renderPairs(grouped.side, grouped.front, "측정 대기");
 }
 function update(info, data) {
   if (info.shooting) {
@@ -164,8 +190,8 @@ function update(info, data) {
     mode = "shooting";
     ["side", "front"].forEach(function (key) {
       setText(document.getElementById("shot-" + key), "촬영중...");
-      renderCards(key, [], "");
     });
+    renderPairs([], [], "");
     return;
   }
   showShots(info);
