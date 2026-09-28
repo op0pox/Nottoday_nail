@@ -19,6 +19,6 @@ python3 capture_server.py
 - `GET http://192.168.55.1:8080/shot` → `{ "front": "<jpeg base64>", "side": "<jpeg base64>" }`
 - `GET http://192.168.55.1:8080/preview` → 왼쪽 측면, 오른쪽 정면을 보여주는 MJPEG. 화면 가운데 Laplacian 분산이 `focus` 숫자로 찍힌다. 같은 장면을 두고 렌즈를 돌려 숫자가 가장 클 때가 초점이다. 시연 중 `/shot`이 느리면 이 탭은 닫는다.
 - `GET http://127.0.0.1:8080/screen` → HDMI에 띄울 사용자 화면. 전처리 이미지, 분류, 실측값만 나온다. 데스크톱에서 `chromium-browser --kiosk http://127.0.0.1:8080/screen` 으로 연다.
-- `GET /shot_info` → `{ "id": 마지막 촬영 번호 }`, `GET /last_shot/front.jpg`, `/last_shot/side.jpg` → 마지막 `/shot` 원본 사진. `/screen` 이 이걸로 촬영 사진을 결과 위에 바로 띄운다.
+- `GET /shot_info` → `{ "id", "has_shot", "shooting" }`, `GET /last_shot/front.jpg`, `/last_shot/side.jpg` → 측정 결과와 함께 올라온 촬영 사진. `/shot` 재시도 사진은 화면에 안 보이고, 결과(`POST /display`)가 오면 마지막 사진이 결과와 같이 뜬다. 촬영 중에는 `/screen` 에 '촬영중...' 만 나오고, 30초 안에 결과가 없으면 이전 화면으로 돌아간다.
 
 전송 이미지는 IMX219 mode 2(1920x1080)를 30fps로 받습니다. 첫 프레임이 들어오면 터미널에 `준비완료`가 찍힙니다. 포트 8080이 막혀 있으면 열어 둡니다.
