@@ -47,7 +47,7 @@ pending_shot = None
 # 화면 갱신용 번호. 결과가 올 때마다 1 늘어난다.
 shot_id = 0
 shooting_since = None
-# 이 시간 안에 결과가 안 오면(실패, 캘리브레이션 촬영) '촬영중...' 을 풀고 이전 화면으로 돌아간다.
+# 이 시간 안에 결과가 안 오면(실패, 캘리브레이션 촬영) '측정중...' 을 풀고 이전 화면으로 돌아간다.
 SHOOTING_TIMEOUT = 30.0
 
 stop_event = threading.Event()
@@ -413,14 +413,14 @@ class ScreenApp(object):
 
     def show_shooting(self):
         for key in ("side", "front"):
-            self.set_shot_text(key, "촬영중...")
+            self.set_shot_text(key, "측정중...")
         self.show_bottom_text("")
 
     def poll(self):
         try:
             version, shooting, shot, display = screen_state()
             if shooting:
-                # 새 측정 시작: 재시도 촬영은 보여주지 않고 결과가 올 때까지 '촬영중...' 만 띄운다.
+                # 새 측정 시작: 재시도 촬영은 보여주지 않고 결과가 올 때까지 '측정중...' 만 띄운다.
                 if self.mode != "shooting":
                     self.mode = "shooting"
                     self.show_shooting()
