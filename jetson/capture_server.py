@@ -1,12 +1,22 @@
-# JetPack 4.6 / Python 3.6. 정면·측면 CSI 한 프레임을 JPEG로 준다.
+# JetPack 4.6 / Python 3.6. 정면·측면 CSI 한 프레임을 JPEG로 주고,
+# 실행하면 HDMI 화면에 사용자 화면 창(Tkinter)을 바로 띄운다.
 import base64
 import json
+import os
 import socketserver
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import cv2
+import numpy as np
+
+try:
+    import tkinter as tk
+    from tkinter import font as tkfont
+except ImportError:  # python3-tk 가 없으면 화면 없이 서버만 돈다.
+    tk = None
 
 HOST = "0.0.0.0"
 PORT = 8080
@@ -29,231 +39,17 @@ read_lock = threading.Lock()
 frame_lock = threading.Lock()
 display_lock = threading.Lock()
 latest_display = {"views": []}
-# HDMI 화면(/screen)에 띄울 촬영 사진.
+# HDMI 사용자 화면 창에 띄울 촬영 사진.
 # /shot 은 재시도로 여러 번 불릴 수 있어서 바로 보여주지 않고 pending_shot 에 둔다.
 # 측정 결과(POST /display)가 오면 그때의 pending_shot 을 latest_shot 으로 올린다.
 latest_shot = None
 pending_shot = None
+# 화면 갱신용 번호. 결과가 올 때마다 1 늘어난다.
 shot_id = 0
 shooting_since = None
 # 이 시간 안에 결과가 안 오면(실패, 캘리브레이션 촬영) '촬영중...' 을 풀고 이전 화면으로 돌아간다.
 SHOOTING_TIMEOUT = 30.0
 
-USER_PAGE = """<!DOCTYPE html>
-<html lang="ko">
-<head>
-<meta charset="utf-8">
-<title>손톱</title>
-<style>
-  * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; overflow: hidden; background: #ffffff; color: #1f2330; font-family: "Noto Sans CJK KR", "Malgun Gothic", sans-serif; }
-  body { display: flex; flex-direction: column; gap: 2.5vh; padding: 3vh 2.5vw; }
-  .shots { display: flex; gap: 2vw; }
-  .col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 1.2vh; }
-  .col h1 { margin: 0; font-size: 3vh; font-weight: 700; text-align: center; }
-  .shot { height: 44vh; display: flex; align-items: center; justify-content: center; background: #f4f5f7; border: 1px solid #e2e4e9; border-radius: 14px; overflow: hidden; }
-  .shot svg { width: 100%; height: 100%; display: block; }
-  .shot path { fill: rgba(255, 0, 85, 0.25); stroke: #ff0055; vector-effect: non-scaling-stroke; stroke-width: 3px; stroke-linejoin: round; }
-  .empty { font-size: 2.4vh; color: #9aa0ab; }
-  #pairs { flex: 1; min-height: 0; display: flex; flex-wrap: wrap; align-content: center; justify-content: center; gap: 1.5vh 1vw; }
-  /* 손톱 한 개 = 측면 전처리 | 형태 | 정면 전처리 */
-  .pair { width: 60vw; max-width: 100%; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 2vw; padding: 2vh 2vw; background: #ffffff; border: 1px solid #e2e4e9; border-radius: 18px; box-shadow: 0 1px 3px rgba(16, 24, 40, 0.08); }
-  .view { min-width: 0; text-align: center; }
-  .view .tag { font-size: 2vh; color: #9aa0ab; margin-bottom: 0.8vh; }
-  .view img, .view .noimg { width: 24vh; max-width: 100%; aspect-ratio: 1 / 1; object-fit: contain; background: #000; border-radius: 10px; display: block; margin: 0 auto; }
-  .mm { font-size: 2.6vh; line-height: 1.45; margin-top: 1vh; white-space: nowrap; }
-  .shape { font-size: 4.5vh; font-weight: 700; padding: 0.6vh 1.6vw; border-radius: 999px; background: #2f5bd3; color: #ffffff; white-space: nowrap; }
-  .shape.none { background: #e2e4e9; color: #6b7280; font-weight: 500; font-size: 2.4vh; }
-</style>
-</head>
-<body>
-<div class="shots">
-  <section class="col">
-    <h1>측면</h1>
-    <div class="shot" id="shot-side"><span class="empty">촬영 대기</span></div>
-  </section>
-  <section class="col">
-    <h1>정면</h1>
-    <div class="shot" id="shot-front"><span class="empty">촬영 대기</span></div>
-  </section>
-</div>
-<main id="pairs"><span class="empty">측정 대기</span></main>
-<script>
-var last = "";
-var shownShot = -1;
-var mode = "";
-function setText(el, text) {
-  el.innerHTML = "";
-  var span = document.createElement("span");
-  span.className = "empty";
-  span.textContent = text;
-  el.appendChild(span);
-}
-var SVG_NS = "http://www.w3.org/2000/svg";
-var XLINK_NS = "http://www.w3.org/1999/xlink";
-var shotImgs = {};
-var contours = { side: [], front: [] };
-function showShots(info, force) {
-  var id = info.id;
-  if (id === shownShot && !force) return;
-  if (!info.has_shot) {
-    shownShot = id;
-    shotImgs = {};
-    ["side", "front"].forEach(function (key) { setText(document.getElementById("shot-" + key), "촬영 대기"); });
-    return;
-  }
-  // 새 사진은 다 받아진 뒤에 한 번에 바꾼다. 이전 사진이 사라졌다 나타나는 깜빡임을 막는다.
-  var keys = ["side", "front"];
-  var loaded = {};
-  var done = 0;
-  keys.forEach(function (key) {
-    var img = new Image();
-    var url = "/last_shot/" + key + ".jpg?id=" + id;
-    img.onload = img.onerror = function () {
-      loaded[key] = { url: url, w: img.naturalWidth, h: img.naturalHeight };
-      done += 1;
-      if (done < keys.length || id !== shownShot) return;
-      shotImgs = loaded;
-      drawShots();
-    };
-    img.src = url;
-  });
-  shownShot = id;
-}
-// 촬영 사진 위에 손톱 윤곽선을 겹친다. viewBox 가 원본 좌표계라 좌표를 그대로 쓴다.
-function drawShots() {
-  if (mode === "shooting") return;
-  ["side", "front"].forEach(function (key) {
-    var shot = shotImgs[key];
-    if (!shot) return;
-    var box = document.getElementById("shot-" + key);
-    if (!shot.w || !shot.h) {
-      setText(box, "사진을 불러오지 못했습니다");
-      return;
-    }
-    var svg = document.createElementNS(SVG_NS, "svg");
-    svg.setAttribute("viewBox", "0 0 " + shot.w + " " + shot.h);
-    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
-    var image = document.createElementNS(SVG_NS, "image");
-    image.setAttribute("width", shot.w);
-    image.setAttribute("height", shot.h);
-    image.setAttribute("href", shot.url);
-    image.setAttributeNS(XLINK_NS, "xlink:href", shot.url);
-    svg.appendChild(image);
-    (contours[key] || []).forEach(function (cnts) {
-      (cnts || []).forEach(function (cnt) {
-        if (!cnt || cnt.length < 3) return;
-        var d = "M " + cnt.map(function (p) { return p[0] + "," + p[1]; }).join(" L ") + " Z";
-        var path = document.createElementNS(SVG_NS, "path");
-        path.setAttribute("d", d);
-        svg.appendChild(path);
-      });
-    });
-    box.innerHTML = "";
-    box.appendChild(svg);
-  });
-}
-function viewKey(label) {
-  return String(label || "").indexOf("정면") >= 0 ? "front" : "side";
-}
-function viewBox(tag, item) {
-  var box = document.createElement("div");
-  box.className = "view";
-  var t = document.createElement("div");
-  t.className = "tag";
-  t.textContent = tag;
-  box.appendChild(t);
-  if (item && item.preview) {
-    var img = document.createElement("img");
-    img.src = item.preview;
-    img.alt = tag + " 전처리";
-    box.appendChild(img);
-  } else {
-    var no = document.createElement("div");
-    no.className = "noimg";
-    box.appendChild(no);
-  }
-  var mm = document.createElement("div");
-  mm.className = "mm";
-  if (item) {
-    mm.appendChild(document.createTextNode("길이 " + (item.length_mm == null ? "-" : item.length_mm) + "mm"));
-    mm.appendChild(document.createElement("br"));
-    mm.appendChild(document.createTextNode("폭 " + (item.width_mm ? item.width_mm + "mm" : "측정 불가")));
-  } else {
-    mm.textContent = "-";
-  }
-  box.appendChild(mm);
-  return box;
-}
-// 손톱은 한 번에 한 개만 찍는다. 혹시 여러 개가 오면 측면 i번째와 정면 i번째를 같은 손톱으로 본다. 형태는 둘을 함께 보고 나온 하나의 값이라 가운데 한 번만 쓴다.
-function renderPairs(side, front, emptyText) {
-  var list = document.getElementById("pairs");
-  list.innerHTML = "";
-  var count = Math.max(side.length, front.length);
-  if (!count) {
-    if (emptyText) setText(list, emptyText);
-    return;
-  }
-  for (var i = 0; i < count; i += 1) {
-    var s = side[i] || null;
-    var f = front[i] || null;
-    var el = document.createElement("div");
-    el.className = "pair";
-    el.appendChild(viewBox("측면", s));
-    var shape = document.createElement("div");
-    var value = (s && s.shape) || (f && f.shape);
-    shape.className = value ? "shape" : "shape none";
-    shape.textContent = value ? value + "형" : "형태 -";
-    el.appendChild(shape);
-    el.appendChild(viewBox("정면", f));
-    list.appendChild(el);
-  }
-}
-function renderData(data) {
-  var raw = JSON.stringify(data);
-  if (raw === last) return;
-  last = raw;
-  var grouped = { side: [], front: [] };
-  ((data && data.views) || []).forEach(function (view) {
-    grouped[viewKey(view.label)] = grouped[viewKey(view.label)].concat(view.items || []);
-  });
-  renderPairs(grouped.side, grouped.front, "측정 대기");
-  contours = {
-    side: grouped.side.map(function (item) { return item.contours || []; }),
-    front: grouped.front.map(function (item) { return item.contours || []; })
-  };
-  drawShots();
-}
-function update(info, data) {
-  if (info.shooting) {
-    // 새 측정 시작: 재시도 촬영은 보여주지 않고 결과가 올 때까지 '촬영중...' 만 띄운다.
-    if (mode === "shooting") return;
-    mode = "shooting";
-    ["side", "front"].forEach(function (key) {
-      setText(document.getElementById("shot-" + key), "촬영중...");
-    });
-    renderPairs([], [], "");
-    return;
-  }
-  // 처음이거나 '촬영중...' 에서 돌아올 때는 사진과 결과를 다시 그린다.
-  var force = mode !== "shown";
-  mode = "shown";
-  if (force) last = "";
-  showShots(info, force);
-  renderData(data);
-}
-function tick() {
-  Promise.all([
-    fetch("/shot_info").then(function (r) { return r.json(); }),
-    fetch("/display").then(function (r) { return r.json(); })
-  ]).then(function (res) { update(res[0], res[1]); }).catch(function () {});
-}
-tick();
-setInterval(tick, 500);
-</script>
-</body>
-</html>
-"""
 stop_event = threading.Event()
 cap0 = None
 cap1 = None
@@ -403,16 +199,6 @@ class Handler(BaseHTTPRequestHandler):
                 payload = latest_display
             self._json(200, payload)
             return
-        if path == "/screen":
-            body = USER_PAGE.encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-cache")
-            self._cors()
-            self.end_headers()
-            self.wfile.write(body)
-            return
         if path == "/shot":
             pair = grab_pair()
             if pair is None:
@@ -423,34 +209,6 @@ class Handler(BaseHTTPRequestHandler):
                 if shooting_since is None:
                     shooting_since = time.time()
             self._json(200, pair)
-            return
-        if path == "/shot_info":
-            with display_lock:
-                if shooting_since is not None and time.time() - shooting_since > SHOOTING_TIMEOUT:
-                    shooting_since = None
-                    pending_shot = None
-                info = {
-                    "id": shot_id,
-                    "has_shot": latest_shot is not None,
-                    "shooting": shooting_since is not None,
-                }
-            self._json(200, info)
-            return
-        if path in ("/last_shot/front.jpg", "/last_shot/side.jpg"):
-            with display_lock:
-                shot = latest_shot
-            key = "front" if path.endswith("front.jpg") else "side"
-            if shot is None or not shot.get(key):
-                self._json(404, {"detail": "촬영 사진이 없습니다."})
-                return
-            body = base64.b64decode(shot[key])
-            self.send_response(200)
-            self.send_header("Content-Type", "image/jpeg")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-cache")
-            self._cors()
-            self.end_headers()
-            self.wfile.write(body)
             return
         self._json(404, {"detail": "not found"})
 
@@ -486,6 +244,289 @@ class ThreadingServer(socketserver.ThreadingMixIn, HTTPServer):
     daemon_threads = True
 
 
+# ---------------------------------------------------------------------------
+# HDMI 사용자 화면 (Tkinter 창)
+# 서버와 같은 프로세스라 HTTP 로 다시 묻지 않고 메모리의 상태를 바로 읽는다.
+# ---------------------------------------------------------------------------
+BG = "#ffffff"
+PANEL = "#f4f5f7"
+BORDER = "#e2e4e9"
+TEXT = "#1f2330"
+MUTED = "#9aa0ab"
+ACCENT = "#2f5bd3"
+# 윤곽선 색 (BGR). 관리자 화면과 같은 #ff0055.
+CONTOUR_BGR = (85, 0, 255)
+POLL_MS = 150
+
+
+def screen_state():
+    """화면에 필요한 상태를 한 번에 복사해 온다."""
+    global pending_shot, shooting_since
+    with display_lock:
+        if shooting_since is not None and time.time() - shooting_since > SHOOTING_TIMEOUT:
+            shooting_since = None
+            pending_shot = None
+        return shot_id, shooting_since is not None, latest_shot, latest_display
+
+
+def decode_b64_image(data):
+    """jpeg base64 또는 data URL 을 BGR 이미지로."""
+    if not data:
+        return None
+    if data.startswith("data:"):
+        data = data.split(",", 1)[-1]
+    try:
+        buf = np.frombuffer(base64.b64decode(data), dtype=np.uint8)
+    except (ValueError, TypeError):
+        return None
+    return cv2.imdecode(buf, cv2.IMREAD_COLOR)
+
+
+def fit_image(img, box_w, box_h, bg):
+    """비율을 지키며 box 안에 맞추고 남는 곳은 bg 색으로 채운다."""
+    h, w = img.shape[:2]
+    scale = min(float(box_w) / w, float(box_h) / h)
+    nw, nh = max(1, int(w * scale)), max(1, int(h * scale))
+    small = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA)
+    canvas = np.full((box_h, box_w, 3), bg, dtype=np.uint8)
+    x, y = (box_w - nw) // 2, (box_h - nh) // 2
+    canvas[y:y + nh, x:x + nw] = small
+    return canvas
+
+
+def draw_contours(img, contour_groups):
+    """원본 좌표 윤곽선을 반투명 채우기 + 선으로 그린다."""
+    polys = []
+    for contours in contour_groups:
+        for cnt in contours or []:
+            if cnt and len(cnt) >= 3:
+                polys.append(np.round(np.array(cnt, dtype=np.float32)).astype(np.int32).reshape(-1, 1, 2))
+    if not polys:
+        return img
+    out = img.copy()
+    overlay = img.copy()
+    cv2.fillPoly(overlay, polys, CONTOUR_BGR)
+    cv2.addWeighted(overlay, 0.25, out, 0.75, 0, out)
+    thickness = max(2, img.shape[1] // 400)
+    cv2.polylines(out, polys, True, CONTOUR_BGR, thickness, cv2.LINE_AA)
+    return out
+
+
+def to_photo(img):
+    """BGR 이미지를 Tk PhotoImage 로. Tk 8.6 기본 PNG 지원만 쓴다(PIL 불필요)."""
+    ok, buf = cv2.imencode(".png", img, [int(cv2.IMWRITE_PNG_COMPRESSION), 1])
+    if not ok:
+        return None
+    return tk.PhotoImage(data=base64.b64encode(buf.tobytes()).decode("ascii"))
+
+
+def hex_bgr(color):
+    color = color.lstrip("#")
+    r, g, b = int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16)
+    return (b, g, r)
+
+
+def view_key(label):
+    return "front" if "정면" in str(label or "") else "side"
+
+
+class ScreenApp(object):
+    def __init__(self, root):
+        self.root = root
+        self.version = None
+        self.mode = ""
+        self.photos = []
+
+        root.title("손톱 측정")
+        root.configure(bg=BG)
+        sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+        root.geometry("%dx%d+0+0" % (sw, sh))
+        root.attributes("-fullscreen", True)
+        root.bind("<Escape>", lambda _e: root.attributes("-fullscreen", False))
+        root.bind("<F11>", lambda _e: root.attributes("-fullscreen", not root.attributes("-fullscreen")))
+        try:
+            root.config(cursor="none")  # 키오스크 화면이라 마우스 커서를 숨긴다.
+        except tk.TclError:
+            pass
+
+        family = self._font_family()
+        self.f_title = (family, max(14, sh // 36), "bold")
+        self.f_empty = (family, max(12, sh // 45))
+        self.f_tag = (family, max(10, sh // 55))
+        self.f_mm = (family, max(12, sh // 40))
+        self.f_shape = (family, max(20, sh // 22), "bold")
+        self.f_none = (family, max(12, sh // 45))
+
+        pad_x, gap = int(sw * 0.025), int(sw * 0.02)
+        self.shot_w = (sw - pad_x * 2 - gap) // 2
+        self.shot_h = int(sh * 0.44)
+        self.prev_size = int(sh * 0.2)
+
+        top = tk.Frame(root, bg=BG)
+        top.pack(fill="x", padx=pad_x, pady=(int(sh * 0.03), 0))
+        self.shot_labels = {}
+        for col, (key, title) in enumerate((("side", "측면"), ("front", "정면"))):
+            box = tk.Frame(top, bg=BG)
+            box.grid(row=0, column=col, padx=(0 if col == 0 else gap, 0))
+            tk.Label(box, text=title, font=self.f_title, bg=BG, fg=TEXT).pack(pady=(0, int(sh * 0.012)))
+            holder = tk.Frame(box, width=self.shot_w, height=self.shot_h, bg=PANEL,
+                              highlightthickness=1, highlightbackground=BORDER)
+            holder.pack()
+            holder.pack_propagate(False)
+            label = tk.Label(holder, bg=PANEL, fg=MUTED, font=self.f_empty, bd=0)
+            label.pack(fill="both", expand=True)
+            self.shot_labels[key] = label
+
+        self.bottom = tk.Frame(root, bg=BG)
+        self.bottom.pack(fill="both", expand=True, padx=pad_x, pady=(int(sh * 0.02), int(sh * 0.03)))
+
+        self.show_waiting()
+        self.root.after(50, self.poll)
+
+    def _font_family(self):
+        try:
+            families = set(tkfont.families(self.root))
+        except tk.TclError:
+            families = set()
+        for name in ("Noto Sans CJK KR", "NanumGothic", "UnDotum", "Malgun Gothic"):
+            if name in families:
+                return name
+        return "TkDefaultFont"
+
+    # ---------- 상태별 화면 ----------
+    def set_shot_text(self, key, text):
+        self.shot_labels[key].config(image="", text=text)
+
+    def clear_bottom(self):
+        for child in self.bottom.winfo_children():
+            child.destroy()
+
+    def show_waiting(self):
+        for key in ("side", "front"):
+            self.set_shot_text(key, "촬영 대기")
+        self.show_bottom_text("측정 대기")
+
+    def show_bottom_text(self, text):
+        self.clear_bottom()
+        if text:
+            tk.Label(self.bottom, text=text, font=self.f_empty, bg=BG, fg=MUTED).place(relx=0.5, rely=0.5, anchor="center")
+
+    def show_shooting(self):
+        for key in ("side", "front"):
+            self.set_shot_text(key, "촬영중...")
+        self.show_bottom_text("")
+
+    def poll(self):
+        try:
+            version, shooting, shot, display = screen_state()
+            if shooting:
+                # 새 측정 시작: 재시도 촬영은 보여주지 않고 결과가 올 때까지 '촬영중...' 만 띄운다.
+                if self.mode != "shooting":
+                    self.mode = "shooting"
+                    self.show_shooting()
+            elif self.mode != "shown" or version != self.version:
+                self.mode = "shown"
+                self.version = version
+                self.render(shot, display)
+        except Exception as exc:  # 화면 오류로 서버까지 죽지 않게 한다.
+            print("화면 갱신 실패: %s" % exc)
+        self.root.after(POLL_MS, self.poll)
+
+    # ---------- 결과 그리기 ----------
+    def render(self, shot, display):
+        grouped = {"side": [], "front": []}
+        for view in (display or {}).get("views") or []:
+            grouped[view_key(view.get("label"))].extend(view.get("items") or [])
+
+        photos = []
+        for key in ("side", "front"):
+            img = decode_b64_image(shot.get(key)) if shot else None
+            if img is None:
+                self.set_shot_text(key, "촬영 대기")
+                continue
+            img = draw_contours(img, [item.get("contours") for item in grouped[key]])
+            photo = to_photo(fit_image(img, self.shot_w - 2, self.shot_h - 2, hex_bgr(PANEL)))
+            if photo is None:
+                self.set_shot_text(key, "사진을 불러오지 못했습니다")
+                continue
+            self.shot_labels[key].config(image=photo, text="")
+            photos.append(photo)
+
+        count = max(len(grouped["side"]), len(grouped["front"]))
+        if not count:
+            self.show_bottom_text("측정 대기")
+        else:
+            self.clear_bottom()
+            row = tk.Frame(self.bottom, bg=BG)
+            row.place(relx=0.5, rely=0.5, anchor="center")
+            for i in range(count):
+                side = grouped["side"][i] if i < len(grouped["side"]) else None
+                front = grouped["front"][i] if i < len(grouped["front"]) else None
+                photos.extend(self.make_pair(row, side, front).photos)
+        # PhotoImage 는 참조가 없으면 사라지므로 들고 있는다.
+        self.photos = photos
+
+    def make_pair(self, parent, side, front):
+        card = tk.Frame(parent, bg=BG, highlightthickness=1, highlightbackground=BORDER, padx=30, pady=16)
+        card.pack(side="left", padx=10)
+        card.photos = []
+        self._view(card, "측면", side).grid(row=0, column=0, padx=20)
+        value = (side or {}).get("shape") or (front or {}).get("shape")
+        if value:
+            badge = tk.Label(card, text="%s형" % value, font=self.f_shape, bg=ACCENT, fg="#ffffff", padx=24, pady=4)
+        else:
+            badge = tk.Label(card, text="형태 -", font=self.f_none, bg=BORDER, fg="#6b7280", padx=16, pady=4)
+        badge.grid(row=0, column=1, padx=30)
+        self._view(card, "정면", front).grid(row=0, column=2, padx=20)
+        return card
+
+    def _view(self, card, tag, item):
+        box = tk.Frame(card, bg=BG)
+        tk.Label(box, text=tag, font=self.f_tag, bg=BG, fg=MUTED).pack()
+        img = decode_b64_image((item or {}).get("preview"))
+        size = self.prev_size
+        if img is None:
+            img = np.zeros((size, size, 3), dtype=np.uint8)
+        photo = to_photo(fit_image(img, size, size, (0, 0, 0)))
+        tk.Label(box, image=photo, bd=0, bg=BG).pack(pady=(6, 8))
+        card.photos.append(photo)
+        if item:
+            length = item.get("length_mm")
+            width = item.get("width_mm")
+            text = "길이 %smm\n폭 %s" % ("-" if length is None else length, "%smm" % width if width else "측정 불가")
+        else:
+            text = "-"
+        tk.Label(box, text=text, font=self.f_mm, bg=BG, fg=TEXT, justify="center").pack()
+        return box
+
+
+def start_gui(server):
+    """창을 띄우고 창이 닫힐 때까지 돌린다. 창을 못 띄우면 False."""
+    if tk is None:
+        print("tkinter 가 없어 화면 없이 서버만 켭니다. (sudo apt-get install python3-tk)")
+        return False
+    if not os.environ.get("DISPLAY"):
+        # SSH 로 켰을 때도 보드에 연결된 HDMI 화면에 띄운다.
+        os.environ["DISPLAY"] = ":0"
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:
+        print("화면을 열지 못해 서버만 켭니다: %s" % exc)
+        return False
+    ScreenApp(root)
+    root.protocol("WM_DELETE_WINDOW", root.destroy)
+    root.bind("<Control-q>", lambda _e: root.destroy())
+    server_thread = threading.Thread(target=server.serve_forever)
+    server_thread.daemon = True
+    server_thread.start()
+    try:
+        root.mainloop()
+    except KeyboardInterrupt:
+        pass
+    server.shutdown()
+    return True
+
+
 def main():
     global pump_thread
     started = time.time()
@@ -504,7 +545,9 @@ def main():
     server = ThreadingServer((HOST, PORT), Handler)
     print("capture server http://%s:%d" % (HOST, PORT))
     try:
-        server.serve_forever()
+        use_gui = "--no-gui" not in sys.argv
+        if not (use_gui and start_gui(server)):
+            server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:

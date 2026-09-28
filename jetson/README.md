@@ -12,13 +12,25 @@ git sparse-checkout set jetson
 USB로 노트북에 붙인 뒤 SSH는 `nvidia@192.168.55.1` 입니다.
 
 ```bash
-python3 capture_server.py
+python3 capture_server.py            # 서버 + HDMI 화면 창
+python3 capture_server.py --no-gui   # 화면 없이 서버만
 ```
+
+실행하면 HDMI 모니터에 사용자 화면 창(Tkinter, 전체화면)이 바로 뜬다. 브라우저는 필요 없다.
+SSH 로 켜도 `DISPLAY` 가 없으면 `:0`(보드에 꽂힌 HDMI)으로 띄운다. 창을 못 열면 서버만 돈다.
+처음 한 번 설치가 필요할 수 있다.
+
+```bash
+sudo apt-get install python3-tk fonts-noto-cjk
+```
+
+- 화면: 위에 측면/정면 촬영 사진 + 손톱 윤곽선, 아래에 측면 전처리 | 형태 | 정면 전처리 와 각 실측값.
+- 관리자 페이지에서 촬영을 시작하면 결과가 올 때까지 '촬영중...' 만 보이고 재시도 사진은 안 보인다. 30초 안에 결과가 없으면 이전 화면으로 돌아간다.
+- 키: `Esc` 전체화면 해제, `F11` 전체화면 전환, `Ctrl+Q` 종료.
 
 - `GET http://192.168.55.1:8080/health`
 - `GET http://192.168.55.1:8080/shot` → `{ "front": "<jpeg base64>", "side": "<jpeg base64>" }`
 - `GET http://192.168.55.1:8080/preview` → 왼쪽 측면, 오른쪽 정면을 보여주는 MJPEG. 화면 가운데 Laplacian 분산이 `focus` 숫자로 찍힌다. 같은 장면을 두고 렌즈를 돌려 숫자가 가장 클 때가 초점이다. 시연 중 `/shot`이 느리면 이 탭은 닫는다.
-- `GET http://127.0.0.1:8080/screen` → HDMI에 띄울 사용자 화면. 전처리 이미지, 분류, 실측값만 나온다. 데스크톱에서 `chromium-browser --kiosk http://127.0.0.1:8080/screen` 으로 연다.
-- `GET /shot_info` → `{ "id", "has_shot", "shooting" }`, `GET /last_shot/front.jpg`, `/last_shot/side.jpg` → 측정 결과와 함께 올라온 촬영 사진. `/shot` 재시도 사진은 화면에 안 보이고, 결과(`POST /display`)가 오면 마지막 사진이 결과와 같이 뜬다. 촬영 중에는 `/screen` 에 '촬영중...' 만 나오고, 30초 안에 결과가 없으면 이전 화면으로 돌아간다.
+- `POST /display` → 관리자 페이지가 측정 결과(전처리 이미지, 실측값, 형태, 윤곽선)를 보낸다. 화면 창이 이걸 그린다. `GET /display` 로 마지막 값을 볼 수 있다.
 
 전송 이미지는 IMX219 mode 2(1920x1080)를 30fps로 받습니다. 첫 프레임이 들어오면 터미널에 `준비완료`가 찍힙니다. 포트 8080이 막혀 있으면 열어 둡니다.
