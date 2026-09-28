@@ -11,12 +11,9 @@ from classification.nail_preprocess import prepare_nail_gray
 from classification.shape_model import ShapeClassifier
 from segmentation.nail_segmentation import YoloNailBackend, measure_nail_from_mask, model_path
 
-SQUARES_X = int(os.getenv("SQUARES_X"))
-SQUARES_Y = int(os.getenv("SQUARES_Y"))
-SQUARE_MM = float(os.getenv("SQUARE_MM"))
-MARKER_MM = float(os.getenv("MARKER_MM"))
-CAMERA_HEIGHT_MM = float(os.getenv("CAMERA_HEIGHT_MM"))
-NAIL_HEIGHT_MM = float(os.getenv("NAIL_HEIGHT_MM"))
+# 체커보드(board) 방식은 지금 쓰지 않아 임시로 끈다. 세그 모델과 ChArUco 보드를 만들지 않고,
+# .env 의 체커보드 값도 읽지 않는다. 다시 쓰려면 True 로 바꾸고 .env 체커보드 값을 채운다.
+BOARD_ENABLED = False
 
 # feat/nano-capture 의 측면 식. 1920x1080은 크롭이라 초점(px)을 나누지 않는다.
 FOCAL_PX_FULL = 3.04 * 1000.0 / 1.12
@@ -34,6 +31,14 @@ def env_float(name, default):
         return default
     return float(raw)
 
+
+if BOARD_ENABLED:
+    SQUARES_X = int(os.getenv("SQUARES_X"))
+    SQUARES_Y = int(os.getenv("SQUARES_Y"))
+    SQUARE_MM = float(os.getenv("SQUARE_MM"))
+    MARKER_MM = float(os.getenv("MARKER_MM"))
+CAMERA_HEIGHT_MM = env_float("CAMERA_HEIGHT_MM", 0.0)
+NAIL_HEIGHT_MM = env_float("NAIL_HEIGHT_MM", 0.0)
 
 # 측면은 렌즈~손톱 7.0cm. 정면은 아래 실측선으로 배율을 정한다.
 SIDE_DISTANCE_CM = env_float("SIDE_DISTANCE_CM", 7.0)
@@ -59,28 +64,31 @@ HARDWARE_OFFSET_MM = {
 }
 
 router = APIRouter(prefix="/api")
-SCALE_MODES = ("board", "hardware")
+SCALE_MODES = ("board", "hardware") if BOARD_ENABLED else ("hardware",)
 # board는 체커보드 사진용 세그, hardware는 흰 배경용 세그
 SEG_BACKENDS = {
-    "board": YoloNailBackend(model_path("seg_checkerboard.pt")),
     "hardware": YoloNailBackend(model_path("seg_white.pt")),
 }
+if BOARD_ENABLED:
+    SEG_BACKENDS["board"] = YoloNailBackend(model_path("seg_checkerboard.pt"))
 FINGER_GROUPS = {
     "thumb": ShapeClassifier(model_path("cls_thumb.pt")),
     "other": ShapeClassifier(model_path("cls_other.pt")),
 }
-aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_250)
-board = cv2.aruco.CharucoBoard((SQUARES_X, SQUARES_Y), SQUARE_MM, MARKER_MM, aruco_dict)
+detector = None
+if BOARD_ENABLED:
+    aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_250)
+    board = cv2.aruco.CharucoBoard((SQUARES_X, SQUARES_Y), SQUARE_MM, MARKER_MM, aruco_dict)
 
-charuco_params = cv2.aruco.CharucoParameters()
-# 보드 바깥이 잘려 마커가 한쪽만 보여도 코너를 보간한다 (기본값은 인접 마커 2개)
-if hasattr(charuco_params, "minMarkers"):
-    charuco_params.minMarkers = 1
+    charuco_params = cv2.aruco.CharucoParameters()
+    # 보드 바깥이 잘려 마커가 한쪽만 보여도 코너를 보간한다 (기본값은 인접 마커 2개)
+    if hasattr(charuco_params, "minMarkers"):
+        charuco_params.minMarkers = 1
 
-detector_params = cv2.aruco.DetectorParameters()
-detector_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
-detector_params.minMarkerPerimeterRate = 0.02
-detector = cv2.aruco.CharucoDetector(board, charuco_params, detector_params)
+    detector_params = cv2.aruco.DetectorParameters()
+    detector_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+    detector_params.minMarkerPerimeterRate = 0.02
+    detector = cv2.aruco.CharucoDetector(board, charuco_params, detector_params)
 
 
 def format_contour(contour):
@@ -235,13 +243,13 @@ def assign_shapes(front_items, side_items, classifier):
 async def measure_nails(
     file: UploadFile = File(...),
     side: Optional[UploadFile] = File(None),
-    scale: str = Form("board"),
+    scale: str = Form("hardware"),
     group: str = Form("other"),
 ):
-    scale_name = (scale or "board").strip().lower()
+    scale_name = (scale or "hardware").strip().lower()
     group_name = (group or "other").strip().lower()
     if scale_name not in SCALE_MODES:
-        raise HTTPException(status_code=400, detail="scale은 board 또는 hardware 이어야 합니다.")
+        raise HTTPException(status_code=400, detail="scale은 %s 중 하나여야 합니다. (체커보드는 임시 비활성)" % ", ".join(SCALE_MODES))
     if group_name not in FINGER_GROUPS:
         raise HTTPException(status_code=400, detail="group은 thumb 또는 other 이어야 합니다.")
 

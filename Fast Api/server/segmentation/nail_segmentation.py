@@ -5,8 +5,9 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 
-CAMERA_HEIGHT_MM = float(os.getenv("CAMERA_HEIGHT_MM"))
-NAIL_HEIGHT_MM = float(os.getenv("NAIL_HEIGHT_MM"))
+# 체커보드 방식에서만 쓰는 값. 비어 있으면 0 (높이 보정 안 함).
+CAMERA_HEIGHT_MM = float(os.getenv("CAMERA_HEIGHT_MM") or 0)
+NAIL_HEIGHT_MM = float(os.getenv("NAIL_HEIGHT_MM") or 0)
 TARGET_POINTS = 100
 IMGSZ = 1024
 
