@@ -47,7 +47,7 @@ pending_shot = None
 # 화면 갱신용 번호. 결과가 올 때마다 1 늘어난다.
 shot_id = 0
 shooting_since = None
-# 이 시간 안에 결과가 안 오면(실패, 캘리브레이션 촬영) '측정중...' 을 풀고 이전 화면으로 돌아간다.
+# 마지막 /shot 뒤로 이 시간 동안 결과가 안 오면(실패, 캘리브레이션 촬영) '측정중...' 을 풀고 이전 화면으로 돌아간다.
 SHOOTING_TIMEOUT = 30.0
 
 stop_event = threading.Event()
@@ -206,8 +206,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             with display_lock:
                 pending_shot = pair
-                if shooting_since is None:
-                    shooting_since = time.time()
+                # 재시도마다 시간을 새로 잰다. 첫 촬영 기준이면 재시도가 길어질 때
+                # 중간에 시간이 넘어가 이전 결과가 잠깐 떴다 사라진다.
+                shooting_since = time.time()
             self._json(200, pair)
             return
         self._json(404, {"detail": "not found"})
