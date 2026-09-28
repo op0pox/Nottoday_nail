@@ -52,7 +52,8 @@ USER_PAGE = """<!DOCTYPE html>
   .col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 1.2vh; }
   .col h1 { margin: 0; font-size: 3vh; font-weight: 700; text-align: center; }
   .shot { height: 44vh; display: flex; align-items: center; justify-content: center; background: #f4f5f7; border: 1px solid #e2e4e9; border-radius: 14px; overflow: hidden; }
-  .shot img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+  .shot svg { width: 100%; height: 100%; display: block; }
+  .shot path { fill: rgba(255, 0, 85, 0.25); stroke: #ff0055; vector-effect: non-scaling-stroke; stroke-width: 3px; stroke-linejoin: round; }
   .empty { font-size: 2.4vh; color: #9aa0ab; }
   #pairs { flex: 1; min-height: 0; display: flex; flex-wrap: wrap; align-content: center; justify-content: center; gap: 1.5vh 1vw; }
   /* 손톱 한 개 = 측면 전처리 | 형태 | 정면 전처리 */
@@ -88,11 +89,16 @@ function setText(el, text) {
   span.textContent = text;
   el.appendChild(span);
 }
-function showShots(info) {
+var SVG_NS = "http://www.w3.org/2000/svg";
+var XLINK_NS = "http://www.w3.org/1999/xlink";
+var shotImgs = {};
+var contours = { side: [], front: [] };
+function showShots(info, force) {
   var id = info.id;
-  if (id === shownShot && mode === "shown") return;
+  if (id === shownShot && !force) return;
   if (!info.has_shot) {
     shownShot = id;
+    shotImgs = {};
     ["side", "front"].forEach(function (key) { setText(document.getElementById("shot-" + key), "촬영 대기"); });
     return;
   }
@@ -102,20 +108,50 @@ function showShots(info) {
   var done = 0;
   keys.forEach(function (key) {
     var img = new Image();
-    img.alt = key === "side" ? "측면 촬영" : "정면 촬영";
+    var url = "/last_shot/" + key + ".jpg?id=" + id;
     img.onload = img.onerror = function () {
-      loaded[key] = img;
+      loaded[key] = { url: url, w: img.naturalWidth, h: img.naturalHeight };
       done += 1;
       if (done < keys.length || id !== shownShot) return;
-      keys.forEach(function (k) {
-        var box = document.getElementById("shot-" + k);
-        box.innerHTML = "";
-        box.appendChild(loaded[k]);
-      });
+      shotImgs = loaded;
+      drawShots();
     };
-    img.src = "/last_shot/" + key + ".jpg?id=" + id;
+    img.src = url;
   });
   shownShot = id;
+}
+// 촬영 사진 위에 손톱 윤곽선을 겹친다. viewBox 가 원본 좌표계라 좌표를 그대로 쓴다.
+function drawShots() {
+  if (mode === "shooting") return;
+  ["side", "front"].forEach(function (key) {
+    var shot = shotImgs[key];
+    if (!shot) return;
+    var box = document.getElementById("shot-" + key);
+    if (!shot.w || !shot.h) {
+      setText(box, "사진을 불러오지 못했습니다");
+      return;
+    }
+    var svg = document.createElementNS(SVG_NS, "svg");
+    svg.setAttribute("viewBox", "0 0 " + shot.w + " " + shot.h);
+    svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+    var image = document.createElementNS(SVG_NS, "image");
+    image.setAttribute("width", shot.w);
+    image.setAttribute("height", shot.h);
+    image.setAttribute("href", shot.url);
+    image.setAttributeNS(XLINK_NS, "xlink:href", shot.url);
+    svg.appendChild(image);
+    (contours[key] || []).forEach(function (cnts) {
+      (cnts || []).forEach(function (cnt) {
+        if (!cnt || cnt.length < 3) return;
+        var d = "M " + cnt.map(function (p) { return p[0] + "," + p[1]; }).join(" L ") + " Z";
+        var path = document.createElementNS(SVG_NS, "path");
+        path.setAttribute("d", d);
+        svg.appendChild(path);
+      });
+    });
+    box.innerHTML = "";
+    box.appendChild(svg);
+  });
 }
 function viewKey(label) {
   return String(label || "").indexOf("정면") >= 0 ? "front" : "side";
@@ -175,13 +211,18 @@ function renderPairs(side, front, emptyText) {
 }
 function renderData(data) {
   var raw = JSON.stringify(data);
-  if (raw === last && mode === "shown") return;
+  if (raw === last) return;
   last = raw;
   var grouped = { side: [], front: [] };
   ((data && data.views) || []).forEach(function (view) {
     grouped[viewKey(view.label)] = grouped[viewKey(view.label)].concat(view.items || []);
   });
   renderPairs(grouped.side, grouped.front, "측정 대기");
+  contours = {
+    side: grouped.side.map(function (item) { return item.contours || []; }),
+    front: grouped.front.map(function (item) { return item.contours || []; })
+  };
+  drawShots();
 }
 function update(info, data) {
   if (info.shooting) {
@@ -194,9 +235,12 @@ function update(info, data) {
     renderPairs([], [], "");
     return;
   }
-  showShots(info);
-  renderData(data);
+  // 처음이거나 '촬영중...' 에서 돌아올 때는 사진과 결과를 다시 그린다.
+  var force = mode !== "shown";
   mode = "shown";
+  if (force) last = "";
+  showShots(info, force);
+  renderData(data);
 }
 function tick() {
   Promise.all([
