@@ -556,7 +556,7 @@ export default function NailMeasurement() {
             <span className="option-label">저장</span>
             <select className="select" value={personId} onChange={(e) => setPersonId(e.target.value)}>
               <option value="">사람 선택</option>
-              {people.map((p) => (
+              {[...people].reverse().map((p) => (
                 <option key={p.id} value={p.id}>
                   {`(${p.id}) ${p.name || '이름없음'} - ${p.saved.length}/${SAVE_SHOT_COUNT}`}
                 </option>

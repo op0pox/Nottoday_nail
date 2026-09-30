@@ -547,11 +547,8 @@ class JetsonCheckApp:
 
     def add_person(self):
         name = self.query_text()
-        if not name:
-            if not messagebox.askyesno("이름 없이 추가", "이름이 없습니다. 이름 없이 추가하시겠습니까?"):
-                self.set_status("추가를 취소했습니다.")
-                return
-        else:
+        # 이름이 없으면 묻지 않고 바로 순번만으로 추가한다.
+        if name:
             if any(person_name(row) == name for row in self.rows):
                 self.set_status(f"'{name}' 은(는) 이미 있습니다.", X_FG)
                 return
@@ -571,8 +568,15 @@ class JetsonCheckApp:
         self.sync_all_photos()
         write_rows(JETSON_CSV, self.rows)
 
-        self.set_query(person_id(row) if not name else name)
+        # 입력칸은 비우고, 전체 목록에서 방금 추가한 사람을 골라 둔다.
+        self.set_query("")
         self.search()
+        for i, shown in enumerate(self.shown_rows):
+            if person_id(shown) == person_id(row):
+                self.match_list.selection_clear(0, tk.END)
+                self.match_list.selection_set(i)
+                self.match_list.see(i)
+                break
         self.set_person(row)
         folder = os.path.basename(default_dir(row))
         self.set_status("%s 추가됨. 사진은 jetson_capture/%s 폴더에 넣으세요. (이름 폴더도 됩니다)" % (display_name(row), folder), O_FG)
